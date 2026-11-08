@@ -405,17 +405,73 @@ final class Guard {
     static boolean sensitivePackage(android.content.Context c, CharSequence pkg) {
         if (pkg == null) return true;
         String p = pkg.toString();
+        if (settingsPackage(c, p)) return false; // Settings is checked by page and destination, below.
         if (NEVER_ALLOWED.matcher(p).find() || p.equals(c.getPackageName()) || p.equals("android")
                 || p.equals("com.android.systemui")) return true;
         android.content.pm.PackageManager pm = c.getPackageManager();
-        android.content.pm.ResolveInfo permissions = pm.resolveActivity(
-                new android.content.Intent("android.intent.action.MANAGE_PERMISSIONS"), 0);
-        if (permissions != null && permissions.activityInfo != null && p.equals(permissions.activityInfo.packageName)) return true;
+        for (String action : new String[]{"android.intent.action.MANAGE_PERMISSIONS", "android.intent.action.MANAGE_APP_PERMISSIONS",
+                "android.settings.MANAGE_UNKNOWN_APP_SOURCES", "android.settings.MANAGE_OVERLAY_PERMISSION",
+                "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS", "android.app.action.ADD_DEVICE_ADMIN",
+                "android.settings.SECURITY_SETTINGS", "android.settings.ACCESSIBILITY_SETTINGS"}) {
+            for (android.content.pm.ResolveInfo handler : pm.queryIntentActivities(new android.content.Intent(action), 0)) {
+                if (handler.activityInfo != null && p.equals(handler.activityInfo.packageName)) return true;
+            }
+        }
         android.content.Intent install = new android.content.Intent(android.content.Intent.ACTION_VIEW)
                 .setDataAndType(android.net.Uri.parse("content://" + c.getPackageName() + "/install.apk"),
                         "application/vnd.android.package-archive");
-        android.content.pm.ResolveInfo to = pm.resolveActivity(install, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
-        return to != null && to.activityInfo != null && p.equals(to.activityInfo.packageName);
+        for (android.content.pm.ResolveInfo to : pm.queryIntentActivities(install, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY))
+            if (to.activityInfo != null && p.equals(to.activityInfo.packageName)) return true;
+        return false;
+    }
+
+    static boolean settingsPackage(android.content.Context c, String pkg) {
+        android.content.pm.ResolveInfo to = c.getPackageManager().resolveActivity(
+                new android.content.Intent(android.provider.Settings.ACTION_SETTINGS), 0);
+        return to != null && to.activityInfo != null && pkg.equals(to.activityInfo.packageName);
+    }
+
+    private static final String[] SETTINGS_PAGES = {"settings_label", "settings_label_launcher", "about_settings",
+            "firmware_version", "display_settings", "sound_settings", "storage_settings", "battery_settings_title"};
+    private static final String[] SETTINGS_LINKS = {"about_settings", "firmware_version", "display_settings",
+            "sound_settings", "storage_settings", "battery_settings_title"};
+
+    /** Use the system app's localized resources; unknown/OEM pages stay human-only. */
+    private static boolean settingText(android.content.Context c, String pkg, CharSequence text, String... names) {
+        if (text == null || text.length() == 0) return false;
+        try {
+            android.content.res.Resources resources = c.getPackageManager().getResourcesForApplication(pkg);
+            for (String name : names) {
+                int id = resources.getIdentifier(name, "string", pkg);
+                if (id != 0 && text.toString().equals(resources.getString(id))) return true;
+            }
+        } catch (Exception ignored) { }
+        return false;
+    }
+
+    private static boolean ordinarySettings(BuddyService svc, AccessibilityWindowInfo window) {
+        String pkg = window.getRoot().getPackageName().toString();
+        String activity = svc.settingsActivity();
+        // SubSettings and arbitrary fragments can carry another page's title. Only reviewed entry activities qualify.
+        return activity != null && (activity.equals(pkg + ".Settings") || activity.endsWith(".homepage.SettingsHomepageActivity")
+                || activity.matches(java.util.regex.Pattern.quote(pkg) + "\\.Settings\\$(MyDeviceInfo|DeviceInfo|FirmwareVersion|DisplaySettings|SoundSettings|Storage|PowerUsageSummary)Activity"))
+                && settingText(svc, pkg, window.getTitle(), SETTINGS_PAGES);
+    }
+
+    static boolean settingsTarget(BuddyService svc, AccessibilityNodeInfo target) {
+        if (target == null || target.getPackageName() == null || !settingsPackage(svc, target.getPackageName().toString())) return true;
+        AccessibilityNodeInfo button = target;
+        while (button.getParent() != null && !button.isClickable()) button = button.getParent();
+        return settingsLink(svc, button, 0);
+    }
+
+    private static boolean settingsLink(BuddyService svc, AccessibilityNodeInfo n, int depth) {
+        if (n == null || depth > 5) return false;
+        String pkg = n.getPackageName().toString();
+        if (settingText(svc, pkg, n.getText(), SETTINGS_LINKS)
+                || settingText(svc, pkg, n.getContentDescription(), "abc_action_bar_up_description", "action_bar_up_description")) return true;
+        for (int i = 0; i < n.getChildCount(); i++) if (settingsLink(svc, n.getChild(i), depth + 1)) return true;
+        return false;
     }
 
     static boolean offLimits(android.content.Context c, AccessibilityNodeInfo n) {
@@ -475,6 +531,7 @@ final class Guard {
             if (type != AccessibilityWindowInfo.TYPE_APPLICATION && !w.isActive() && !w.isFocused()) continue;
             AccessibilityNodeInfo root = w.getRoot();
             if (root == null || offLimits(svc, root)) return true;
+            if (root.getPackageName() != null && settingsPackage(svc, root.getPackageName().toString()) && !ordinarySettings(svc, w)) return true;
         }
         return false;
     }

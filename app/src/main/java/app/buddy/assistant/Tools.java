@@ -1480,6 +1480,8 @@ final class Tools {
         if (Guard.offLimits(svc, hit) || (element != null && Guard.offLimits(svc, element))) {
             return "BLOCKED: that's one of Buddy's own screens. Only the user taps those.";
         }
+        if (!Guard.settingsTarget(svc, hit) || !Guard.settingsTarget(svc, element)
+                || hit == null && Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))) return HUMAN_ONLY;
         AccessibilityNodeInfo target = element != null ? element : hit;
         if (target == null) return null;
         String pkg = str(target.getPackageName());
@@ -2014,6 +2016,7 @@ final class Tools {
     private String openUrl(String url) throws InterruptedException {
         Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         ResolveInfo to = svc.getPackageManager().resolveActivity(i, 0);
+        if (to != null && to.activityInfo != null && Guard.settingsPackage(svc, to.activityInfo.packageName)) return HUMAN_ONLY;
         if (to != null && to.activityInfo != null && Guard.sensitivePackage(svc, to.activityInfo.packageName))
             return HUMAN_ONLY;
         McpServer.requireActive();

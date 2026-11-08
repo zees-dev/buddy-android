@@ -2,7 +2,7 @@
 
 Buddy lets AI agents use your phone, so its approval rules are its most important part: an agent must not send, post, buy, pay or delete anything without your OK on Buddy's card.
 
-Installers, permission controllers, Android Settings and security controls, app stores, the system shade and Buddy's own UI are human-only. Phone input stops while these surfaces are present, including coordinate gestures and keyboard actions, regardless of saved app trust. Installing or updating an APK always requires the human to use Android's installer.
+Installers, permission controllers, sensitive Android Settings and security controls, app stores, the system shade and Buddy's own UI are human-only. Ordinary Settings navigation and reading are allowed on recognized pages (including About phone and Android version). Only links to recognized ordinary pages can be tapped there; Build number, accessibility, app/special permissions, developer/debugging, security, credentials and accounts stay human-only. Page and link recognition uses Settings' own localized resources and activity identities; unknown OEM pages fail closed. Phone input stops on protected surfaces, including coordinate gestures and keyboard actions, regardless of saved app trust. Installing or updating an APK always requires the human to use Android's installer.
 
 A plan confirmation grants no authority to a later tool call. Protected actions ask in the executing request; approval cannot be transferred or replayed. Screen actions bind the tool arguments, target identity and readable screen to a server-generated request identity, serialize dispatch and re-check them before acting. A changed target or ended session requires a new approval.
 
