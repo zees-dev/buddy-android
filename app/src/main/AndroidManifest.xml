@@ -139,6 +139,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".BackupActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".WaitingActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
