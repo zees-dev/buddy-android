@@ -1743,15 +1743,16 @@ final class Tools {
     }
 
     private AccessibilityNodeInfo scrollTarget(AccessibilityNodeInfo n) {
-        if (n == null || !n.isScrollable()) {
-            for (AccessibilityWindowInfo w : svc.getWindows()) {
-                if (w.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
-                        || w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue;
-                n = scrollable(w.getRoot());
-                if (n != null) break;
-            }
+        for (AccessibilityWindowInfo w : svc.getWindows()) {
+            if (w.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
+                    || w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+                    || (n == null ? !w.isActive() : w.getId() != n.getWindowId())) continue;
+            AccessibilityNodeInfo root = w.getRoot();
+            if (root == null || root.getPackageName() == null || !(Guard.settingsPackage(svc, String.valueOf(root.getPackageName()))
+                    || Guard.sensitivePackage(svc, root.getPackageName()))) return null;
+            return n != null && n.isScrollable() ? n : scrollable(root);
         }
-        return n;
+        return null;
     }
 
     /** Accessibility scrolling cannot turn a touch-down into a Settings toggle. */
@@ -1778,7 +1779,8 @@ final class Tools {
     private String scroll(JSONObject a) throws Exception {
         String dir = a.getString("direction").toLowerCase(Locale.ROOT);
         AccessibilityNodeInfo n = node(a);
-        if (Guard.humanOnly(svc) || Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))) return scrollPage(dir, n);
+        if (Guard.humanOnly(svc) || Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))
+                || n != null && Guard.settingsPackage(svc, String.valueOf(n.getPackageName()))) return scrollPage(dir, n);
         Rect r = new Rect();
         if (n != null) {
             n.getBoundsInScreen(r);
@@ -1816,16 +1818,17 @@ final class Tools {
         // A stroke too short to scroll anything lands as a tap, so it gets every check a tap gets
         int slop = ViewConfiguration.get(svc).getScaledTouchSlop();
         boolean tap = Math.hypot(x2 - x1, y2 - y1) <= slop;
-        if (Guard.humanOnly(svc) || Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))) {
-            AccessibilityNodeInfo n = scrollTarget(null);
-            if (!tap && n != null)
-                return scrollPage(Math.abs(y2 - y1) >= Math.abs(x2 - x1)
-                        ? (y2 < y1 ? "down" : "up") : (x2 < x1 ? "right" : "left"), n);
-            return tap(new JSONObject().put("x", x1).put("y", y1), false);
+        AccessibilityNodeInfo hit = Guard.nodeAt(svc.getWindows(), x1, y1);
+        if (Guard.humanOnly(svc) || Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))
+                || hit != null && Guard.settingsPackage(svc, String.valueOf(hit.getPackageName()))) {
+            if (tap) return tap(new JSONObject().put("x", x1).put("y", y1), false);
+            if (hit == null) return NOTHING_CHANGED + ": no readable window at the swipe start.";
+            return scrollPage(Math.abs(y2 - y1) >= Math.abs(x2 - x1)
+                    ? (y2 < y1 ? "down" : "up") : (x2 < x1 ? "right" : "left"), hit);
         }
-        Binding binding = new Binding("swipe", a, Guard.nodeAt(svc.getWindows(), x1, y1));
+        Binding binding = new Binding("swipe", a, hit);
         action.set(binding);
-        String blocked = tap ? guard(null, Guard.nodeAt(svc.getWindows(), x1, y1)) : guardStroke(null, x1, y1, x2, y2);
+        String blocked = tap ? guard(null, hit) : guardStroke(null, x1, y1, x2, y2);
         if (blocked != null) return blocked;
         Path p = new Path();
         p.moveTo(x1, y1);
