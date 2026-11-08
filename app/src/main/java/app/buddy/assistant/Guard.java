@@ -472,7 +472,7 @@ final class Guard {
     }
 
     private static final Pattern SENSITIVE_INPUT = Pattern.compile(
-            "(?iu)password|passcode|one.?time|otp|verification.?code|credit.?card|card.?number|cc-|cvc|cvv|security.?code|(?:^|[^a-z])pin(?:$|[^a-z])|"
+            "(?iu)password|pass.?code|one.?time|otp|verification.?code|credit.?card|card.?number|cc-|cvc|cvv|security.?code|(?:^|[^a-z])pin(?:[_-]?(?:entry|code|dots?|display|pad))?(?:$|[^a-z])|"
             + "密码|密碼|口令|验证码|驗證碼|校验码|校驗碼|动态码|動態碼|認証コード|暗証番号|パスワード|비밀번호|인증.?번호|인증.?코드|"
             + "mot.de.passe|code.d.accès|code.de.vérification|passwort|kennwort|bestätigungscode|contraseña|código.de.verificación|"
             + "senha|código.de.verificação|codice.di.verifica|wachtwoord|verificatiecode|hasło|kod.weryfikacyjny|пароль|код.подтверждения|"
