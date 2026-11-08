@@ -8,7 +8,7 @@ A plan confirmation grants no authority to a later tool call. Protected actions 
 
 Chat authority comes from a temporary credential issued by Buddy to that chat's helper, revoked when the helper ends or the phone-tools token rotates. Caller-supplied chat IDs grant no authority. Each effect and batch substep checks the authenticated request again; token rotation closes connections and interrupts executing requests.
 
-Native text entry checks password flags, input types, accessibility sensitivity, field hints and exposed autofill metadata. Sensitive and unclassified editors require human entry, even in trusted apps. This applies to typing, clipboard writes, paste, IME taps, gestures and global key actions while such a destination is focused; typing labels, approval notes and step logs omit the text, and typing steps have no saved screenshot. Agent vendors may retain tool arguments in their own private transcripts.
+A credential signal anywhere in an application window requires a bound human approval for every input action there, before app trust or saved exceptions. Signals include password flags and input types, exposed autofill metadata, localized credential labels and resource IDs, and PIN/passcode indicators. This covers taps, long presses, swipes, typing, paste, clipboard writes, key actions and batch substeps. Read-only tools, Back, Home and app launch remain available. Typing labels, approval notes and step logs omit the text, and typing steps have no saved screenshot. Agent vendors may retain tool arguments in their own private transcripts.
 
 ## Reporting a vulnerability
 

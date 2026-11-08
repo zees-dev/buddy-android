@@ -1,7 +1,6 @@
 package app.buddy.assistant;
 
 import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
@@ -116,7 +115,6 @@ final class PhoneTools {
         McpServer.requireActive();
         switch (name) {
             case "clipboard_read": return text(clipboardRead());
-            case "clipboard_write": return text(clipboardWrite(a.getString("text")));
             case "set_alarm": return text(setAlarm(a));
             case "set_timer": return text(setTimer(a));
             case "share": return text(share(a));
@@ -146,22 +144,6 @@ final class PhoneTools {
         if (r == null) return "Couldn't read the clipboard (Buddy couldn't come to the front). Ask the user to paste it.";
         String s = r.toString();
         return s.isEmpty() ? "The clipboard is empty, or holds no text." : "Clipboard:\n" + s;
-    }
-
-    private String clipboardWrite(String text) throws Exception {
-        if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
-        AtomicReference<String> err = new AtomicReference<>();
-        svc.runEffect(() -> {
-            try {
-                ClipboardManager cm = (ClipboardManager) svc.getSystemService(Context.CLIPBOARD_SERVICE);
-                if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc)) {
-                    err.set(Guard.HUMAN_ENTRY);
-                } else cm.setPrimaryClip(ClipData.newPlainText("Buddy", text));
-            } catch (Exception e) {
-                err.set(String.valueOf(e.getMessage()));
-            }
-        });
-        return err.get() == null ? "Copied: the user can paste it now." : "Couldn't copy: " + err.get();
     }
 
     // ------------------------------------------------------------- clock
