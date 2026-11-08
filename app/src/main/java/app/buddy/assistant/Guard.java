@@ -452,10 +452,20 @@ final class Guard {
     private static boolean ordinarySettings(BuddyService svc, AccessibilityWindowInfo window) {
         String pkg = window.getRoot().getPackageName().toString();
         String activity = svc.settingsActivity();
-        // SubSettings and arbitrary fragments can carry another page's title. Only reviewed entry activities qualify.
-        return activity != null && (activity.equals(pkg + ".Settings") || activity.endsWith(".homepage.SettingsHomepageActivity")
-                || activity.matches(java.util.regex.Pattern.quote(pkg) + "\\.Settings\\$(MyDeviceInfo|DeviceInfo|FirmwareVersion|DisplaySettings|SoundSettings|Storage|PowerUsageSummary)Activity"))
-                && settingText(svc, pkg, window.getTitle(), SETTINGS_PAGES);
+        if (!settingText(svc, pkg, window.getTitle(), SETTINGS_PAGES)) return false;
+        // Android can restore an activity without reporting its class again. The page's own heading remains current;
+        // a dialog or arbitrary SubSettings fragment cannot borrow a remembered activity's permission.
+        if (settingsHeading(window.getRoot(), window.getTitle(), 0)) return true;
+        return settingText(svc, pkg, window.getTitle(), "settings_label", "settings_label_launcher")
+                && activity != null && (activity.equals(pkg + ".Settings") || activity.endsWith(".homepage.SettingsHomepageActivity"));
+    }
+
+    private static boolean settingsHeading(AccessibilityNodeInfo n, CharSequence title, int depth) {
+        if (n == null || depth > 15 || !n.isVisibleToUser()) return false;
+        if (n.isHeading() && (title.toString().contentEquals(n.getText() == null ? "" : n.getText())
+                || title.toString().contentEquals(n.getContentDescription() == null ? "" : n.getContentDescription()))) return true;
+        for (int i = 0; i < n.getChildCount(); i++) if (settingsHeading(n.getChild(i), title, depth + 1)) return true;
+        return false;
     }
 
     static boolean settingsTarget(BuddyService svc, AccessibilityNodeInfo target) {
