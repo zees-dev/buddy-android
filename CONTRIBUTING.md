@@ -16,6 +16,8 @@ See [For developers](README.md#for-developers) in the README: `./gradlew assembl
 
 There are two flavors: `github` (the release on GitHub, which updates itself) and `fdroid` (the same app without the self-updater: F-Droid builds, signs and updates it).
 
+This fork's GitHub updater checks and downloads releases only from `zees-dev/buddy-android`. Publish fork-signed APKs there; never uninstall the fork to bypass Android's signing checks.
+
 ## Translations
 
 Buddy's English text is in `app/src/main/res/values/strings.xml`, and each language has its own `values-<code>/strings.xml`. The first translations were made with AI, so corrections from native speakers are very welcome.
