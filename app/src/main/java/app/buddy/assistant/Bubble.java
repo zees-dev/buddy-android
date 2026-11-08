@@ -2257,6 +2257,9 @@ final class Bubble implements ChatHub.Listener {
         return pendingConfirm == null ? null : cardChat;
     }
 
+    private boolean expandedBeforeCards;
+    private View focusBeforeCards;
+
     /** Shows the card, or queues it while another one waits for the user. */
     private void showCard(Card card) {
         if (pendingConfirm != null) {
@@ -2264,6 +2267,10 @@ final class Bubble implements ChatHub.Listener {
             paintCardLabel();
             hub.changed();
             return;
+        }
+        if (shownCard == null) {
+            expandedBeforeCards = expanded;
+            focusBeforeCards = root.findFocus();
         }
         shownCard = card;
         String text = card.text, chat = card.chat;
@@ -2315,6 +2322,7 @@ final class Bubble implements ChatHub.Listener {
             else showCard(next);
         }
         paintCardLabel();
+        if (pendingConfirm == null) shownCard = null;
     }
 
     private void setCardLabel(String label) {
@@ -2395,6 +2403,13 @@ final class Bubble implements ChatHub.Listener {
         refreshStatus();
         hub.changed();
         showNext();
+        if (pendingConfirm == null) {
+            if (expandedBeforeCards) {
+                expand();
+                if (focusBeforeCards != null) focusBeforeCards.requestFocus();
+            } else collapse();
+            focusBeforeCards = null;
+        }
     }
 
     private Button optionButton(String label, boolean muted, View.OnClickListener onClick) {
