@@ -405,9 +405,16 @@ final class Guard {
     }
 
     private static final String[] SETTINGS_PAGES = {"settings_label", "settings_label_launcher", "about_settings",
-            "firmware_version", "display_settings", "sound_settings", "storage_settings", "battery_settings_title"};
-    private static final String[] SETTINGS_LINKS = {"about_settings", "firmware_version", "display_settings",
-            "sound_settings", "storage_settings", "battery_settings_title"};
+            "firmware_version", "display_settings", "sound_settings", "storage_settings", "battery_settings_title",
+            "power_usage_summary_title", "network_dashboard_title", "network_and_internet_preferences_title", "configure_notification_settings"};
+    private static final String[] PROTECTED_SETTINGS = {"accessibility_settings", "accessibility_settings_title",
+            "app_permissions", "applications_settings", "apps_dashboard_title", "special_access", "install_unknown_applications",
+            "development_settings_title", "security_settings_title", "security_dashboard_title", "lockscreen_settings_title",
+            "lock_settings_title", "account_settings_title", "user_settings_title", "system_dashboard_title",
+            "build_number", "search_menu", "search_menu_title", "search_settings", "notification_access_settings_title"};
+    private static final Pattern PROTECTED_SETTING = Pattern.compile(
+            "(?iu)accessibility|permission|special.?access|unknown.?apps|install|developer|development|debug|security|"
+            + "lock.?screen|screen.?lock|password|passcode|account|build.?number|search");
 
     /** Use the system app's localized resources; unknown/OEM pages stay human-only. */
     private static boolean settingText(android.content.Context c, String pkg, CharSequence text, String... names) {
@@ -447,15 +454,16 @@ final class Guard {
         if (target == null || target.getPackageName() == null || !settingsPackage(svc, target.getPackageName().toString())) return true;
         AccessibilityNodeInfo button = target;
         while (button.getParent() != null && !button.isClickable()) button = button.getParent();
-        return settingsLink(svc, button, 0);
+        return !protectedSettingsLink(svc, button, 0);
     }
 
-    private static boolean settingsLink(BuddyService svc, AccessibilityNodeInfo n, int depth) {
+    private static boolean protectedSettingsLink(BuddyService svc, AccessibilityNodeInfo n, int depth) {
         if (n == null || depth > 5) return false;
-        String pkg = n.getPackageName().toString();
-        if (settingText(svc, pkg, n.getText(), SETTINGS_LINKS)
-                || settingText(svc, pkg, n.getContentDescription(), "abc_action_bar_up_description", "action_bar_up_description")) return true;
-        for (int i = 0; i < n.getChildCount(); i++) if (settingsLink(svc, n.getChild(i), depth + 1)) return true;
+        String pkg = String.valueOf(n.getPackageName());
+        if (settingText(svc, pkg, n.getText(), PROTECTED_SETTINGS)
+                || settingText(svc, pkg, n.getContentDescription(), PROTECTED_SETTINGS)
+                || PROTECTED_SETTING.matcher(n.getText() + " " + n.getContentDescription() + " " + n.getViewIdResourceName()).find()) return true;
+        for (int i = 0; i < n.getChildCount(); i++) if (protectedSettingsLink(svc, n.getChild(i), depth + 1)) return true;
         return false;
     }
 
