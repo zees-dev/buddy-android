@@ -398,12 +398,12 @@ run_codex() {
   for f in "${IMGS[@]}"; do img+=("--image=$f"); done
   cd "$W" || return 1
   if [ -s "$S/codex-thread" ]; then
-    BUDDY_TOKEN=$TOKEN codex exec "${cfg[@]}" "${sandbox[@]}" --json --skip-git-repo-check \
+    BUDDY_TOKEN=$TOKEN /root/bin/buddy-codex exec "${cfg[@]}" "${sandbox[@]}" --json --skip-git-repo-check \
       resume "${img[@]}" -- "$(cat "$S/codex-thread")" "$prompt" </dev/null 2>"$S/last-error.log"
   else
     # codex exec has no system-prompt flag, so Buddy's instructions lead the first message.
     prompt="$SYSTEM"$'\n\n---\n\nUser message from the Buddy bubble:\n'"$MSG"
-    BUDDY_TOKEN=$TOKEN codex exec "${cfg[@]}" "${sandbox[@]}" "${img[@]}" --json --skip-git-repo-check \
+    BUDDY_TOKEN=$TOKEN /root/bin/buddy-codex exec "${cfg[@]}" "${sandbox[@]}" "${img[@]}" --json --skip-git-repo-check \
       -- "$prompt" </dev/null 2>"$S/last-error.log"
   fi
 }
@@ -903,7 +903,7 @@ tools (call_mcp_tool, ServerName \"phone\") and finish the user's request."
     [ -s "$S/grok-error" ] && status=0
     name=Grok
   elif [ "$BACKEND" = codex ]; then
-    if ! have codex; then event buddy_error "Codex isn't installed yet. Install it in Buddy's Settings."; exit 0; fi
+    if ! sh /root/bin/install-codex.sh --ensure; then event buddy_error "Codex isn't installed yet. Install it in Buddy's Settings."; exit 0; fi
     run_codex | stream_codex
     status=${PIPESTATUS[0]}
     if [ "$status" -ne 0 ] && [ -s "$S/codex-thread" ] && grep -q -i -E 'not found|no such|unknown (thread|session)' "$S/last-error.log" 2>/dev/null; then

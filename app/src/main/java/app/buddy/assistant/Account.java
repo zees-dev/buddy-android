@@ -300,8 +300,11 @@ final class Account {
                         set(Step.SIGNED_OUT, "");
                     }
                 } else {
-                    String out = Linux.exec(app, "command -v codex >/dev/null || { echo NOTINSTALLED; exit 0; }; "
-                            + "codex login status 2>&1; echo VER=$(codex --version 2>/dev/null)", 60);
+                    Helper.sync(app);
+                    String out = Linux.exec(app, "command -v codex >/dev/null || [ -d /opt/buddy-codex-0.167.0 ] || { echo NOTINSTALLED; exit 0; }; "
+                            + "sh /root/bin/install-codex.sh --ensure || exit 1; "
+                            + "/root/bin/buddy-codex login status 2>&1; echo VER=$(/root/bin/buddy-codex --version 2>/dev/null)", 900);
+                    if (!out.contains("VER=codex-cli" ) && !out.contains("NOTINSTALLED")) throw new IOException("Codex verification failed");
                     version = ver(out);
                     String low = out.toLowerCase(Locale.ROOT);
                     if (out.contains("NOTINSTALLED")) {
@@ -456,7 +459,7 @@ final class Account {
                             + OC_GLIBC + " tail -3 /tmp/npm.log; echo VER=$(opencode --version)", 1800);
                 } else {
                     Helper.sync(app);
-                    o = Linux.exec(app, "sh /root/bin/install-codex.sh && echo VER=$(codex --version)", 1800);
+                    o = Linux.exec(app, "sh /root/bin/install-codex.sh && echo VER=$(/root/bin/buddy-codex --version)", 1800);
                 }
                 String after = ver(o);
                 if (after.isEmpty()) throw new IOException(tail(o));
@@ -501,8 +504,8 @@ final class Account {
                         : agy() ? Linux.builder(app, "/bin/sh", "-c", "command -v script >/dev/null || apk add -q util-linux-misc;"
                                 + " exec script -qec \"" + AGY_BIN + " -p 'Reply with just: ok'\" /dev/null")
                         : grok() ? Linux.builder(app, GROK_BIN, "login", "--device-auth")
-                        : onOtherDevice ? Linux.builder(app, "codex", "login", "--device-auth")
-                        : Linux.builder(app, "codex", "login")).start();
+                        : onOtherDevice ? Linux.builder(app, "/root/bin/buddy-codex", "login", "--device-auth")
+                        : Linux.builder(app, "/root/bin/buddy-codex", "login")).start();
                 synchronized (this) {
                     login = p;
                     loginIn = p.getOutputStream();
@@ -611,7 +614,7 @@ final class Account {
             try {
                 if (agy()) Linux.exec(app, "rm -f " + AGY_TOKEN, 60); // agy only signs out from its own screen (/logout)
                 else if (grok()) Linux.exec(app, GROK_BIN + " logout", 60);
-                else if (!opencode()) Linux.exec(app, claude() ? "claude auth logout" : "codex logout", 60);
+                else if (!opencode()) Linux.exec(app, claude() ? "claude auth logout" : "/root/bin/buddy-codex logout", 60);
             } catch (Exception ignored) {
             }
             refresh(app);

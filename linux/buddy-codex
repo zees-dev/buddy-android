@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+sh /root/bin/install-codex.sh --check || { echo 'Codex verification failed. Reinstall Codex in Buddy Settings.' >&2; exit 1; }
+exec /opt/buddy-codex-0.167.0/vendor/aarch64-unknown-linux-musl/bin/codex "$@"
