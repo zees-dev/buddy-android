@@ -17,14 +17,26 @@ final class Prefs {
     static synchronized String token(Context c) {
         String t = sp(c).getString("token", null);
         if (t == null) {
-            byte[] b = new byte[24];
-            new SecureRandom().nextBytes(b);
-            StringBuilder sb = new StringBuilder();
-            for (byte x : b) sb.append(String.format("%02x", x));
-            t = sb.toString();
+            t = newToken();
             sp(c).edit().putString("token", t).apply();
         }
         return t;
+    }
+
+    static synchronized String rotateToken(Context c) {
+        String t = newToken();
+        if (!sp(c).edit().putString("token", t).commit()) throw new IllegalStateException("Couldn't rotate token");
+        BuddyService svc = BuddyService.get();
+        if (svc != null) svc.rotateMcpToken(t);
+        return t;
+    }
+
+    private static String newToken() {
+        byte[] b = new byte[24];
+        new SecureRandom().nextBytes(b);
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format("%02x", x));
+        return sb.toString();
     }
 
     static int[] bubblePos(Context c) {

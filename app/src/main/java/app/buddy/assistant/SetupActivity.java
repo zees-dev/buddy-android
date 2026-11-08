@@ -400,6 +400,16 @@ public class SetupActivity extends Screen implements Account.Listener, RemoteSes
         LinearLayout.LayoutParams cpp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(this, 44));
         cpp.topMargin = dp(this, 12);
         mcp.addView(copy, cpp);
+        Button rotate = button(this, getString(R.string.setup_rotate_token), false);
+        rotate.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+                .setMessage(R.string.setup_rotate_token_info)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.setup_rotate_token, (d, which) -> {
+                    Prefs.rotateToken(this);
+                    render();
+                }).show());
+        mcp.addView(rotate, topGap(12));
+        protect(mcp);
         addCard(mcp);
 
         // ---------------------------------------------------------------- voice

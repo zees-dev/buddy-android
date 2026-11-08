@@ -424,6 +424,10 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         return tools.call(name, args);
     }
 
+    void rotateMcpToken(String token) {
+        if (server != null) server.rotateToken(token);
+    }
+
     @Override
     public java.io.File attachment(String id) {
         return Attachments.file(this, id);

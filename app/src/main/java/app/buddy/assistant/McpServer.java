@@ -58,7 +58,7 @@ final class McpServer {
         java.io.File attachment(String id);
     }
 
-    private final String token;
+    private volatile String token;
     private final Handler handler;
     private final ExecutorService pool = new ThreadPoolExecutor(0, 8, 30, TimeUnit.SECONDS,
             new SynchronousQueue<>());
@@ -85,6 +85,11 @@ final class McpServer {
         } catch (IOException ignored) {
         }
         pool.shutdownNow();
+        for (Socket s : clients) try { s.close(); } catch (IOException ignored) { }
+    }
+
+    void rotateToken(String next) {
+        token = next;
         for (Socket s : clients) try { s.close(); } catch (IOException ignored) { }
     }
 
