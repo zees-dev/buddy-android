@@ -101,14 +101,19 @@ final class Bubble implements ChatHub.Listener {
     private ConfirmCallback pendingConfirm;
     /** A card that waits its turn behind the one shown (another chat asked meanwhile). */
     private static final class Card {
-        final String text, chat;
+        final String text, chat, logText;
         final java.util.List<String> options;
         final ConfirmCallback cb;
         final boolean open;
         final int countdown;
 
         Card(String text, java.util.List<String> options, String chat, ConfirmCallback cb, boolean open, int countdown) {
+            this(text, options, chat, cb, open, countdown, text);
+        }
+
+        Card(String text, java.util.List<String> options, String chat, ConfirmCallback cb, boolean open, int countdown, String logText) {
             this.text = text;
+            this.logText = logText;
             this.options = options;
             this.chat = chat;
             this.cb = cb;
@@ -2163,6 +2168,10 @@ final class Bubble implements ChatHub.Listener {
         showCard(new Card(summary, null, chat, cb, true, countdown));
     }
 
+    void askInputConfirm(String summary, String chat, ConfirmCallback cb) {
+        showCard(new Card(summary, null, chat, cb, true, 0, svc.getString(R.string.activity_typing)));
+    }
+
     // ------------------------------------------------------------ countdown
 
     private final Runnable countdownTick = new Runnable() {
@@ -2282,7 +2291,7 @@ final class Bubble implements ChatHub.Listener {
         confirmDeny.setText(asking ? R.string.card_skip : R.string.card_deny);
         confirmDeny.setTextColor(asking ? Ui.TEXT : Ui.ERR);
         confirmDeny.setBackground(rounded(asking ? Ui.CARD : Ui.ERR_SOFT, 16, 0, 0));
-        confirmChange.setVisibility(asking ? View.GONE : View.VISIBLE);
+        confirmChange.setVisibility(asking || !card.text.equals(card.logText) ? View.GONE : View.VISIBLE);
         confirmApprove.setVisibility(asking ? View.GONE : View.VISIBLE);
         if (asking) confirmRow.setPaddingRelative(0, dp(8), 0, 0);
         else confirmRow.setPaddingRelative(0, 0, 0, 0);
@@ -2436,7 +2445,7 @@ final class Bubble implements ChatHub.Listener {
         confirmCard.setVisibility(View.GONE);
         if (cardChat != null && !"opencode".equals(cardChat.backend)) {
             hub.note(cardChat, Kind.STEP, asking ? svc.getString(R.string.card_note_skipped)
-                    : approved ? svc.getString(R.string.card_note_approved, clip(confirmText.getText().toString(), 80))
+                    : approved ? svc.getString(R.string.card_note_approved, clip(shownCard.logText, 80))
                     : svc.getString(R.string.card_note_denied));
         }
         if (cb != null) cb.onAnswer(approved, null);

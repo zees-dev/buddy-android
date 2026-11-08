@@ -239,6 +239,7 @@ final class Guard {
     }
 
     private static String shortLabel(AccessibilityNodeInfo n) {
+        if (n.isEditable() && sensitiveInput(n)) return "Sensitive field";
         for (CharSequence cs : new CharSequence[]{n.getText(), n.getContentDescription()}) {
             if (cs == null) continue;
             String s = cs.toString().trim().replaceAll("\\s+", " ");
@@ -419,6 +420,28 @@ final class Guard {
 
     static boolean offLimits(android.content.Context c, AccessibilityNodeInfo n) {
         return n != null && sensitivePackage(c, n.getPackageName());
+    }
+
+    private static final Pattern SENSITIVE_INPUT = Pattern.compile(
+            "(?i)password|passcode|one.?time|otp|verification.?code|credit.?card|card.?number|cc-|cvc|cvv|security.?code|\\bpin\\b");
+
+    /** Accessibility does not expose View autofill hints uniformly; also check input types, hints and exposed extras. */
+    static boolean sensitiveInput(AccessibilityNodeInfo n) {
+        if (n == null || n.isPassword()) return true;
+        if (android.os.Build.VERSION.SDK_INT >= 34 && n.isAccessibilityDataSensitive()) return true;
+        int type = n.getInputType(), cls = type & android.text.InputType.TYPE_MASK_CLASS;
+        int variation = type & android.text.InputType.TYPE_MASK_VARIATION;
+        if (cls == android.text.InputType.TYPE_CLASS_TEXT && (variation == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                || variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)
+                || cls == android.text.InputType.TYPE_CLASS_NUMBER && variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) return true;
+        String hints = n.getHintText() + " " + n.getViewIdResourceName() + " " + n.getContentDescription();
+        for (String key : n.getExtras().keySet()) {
+            if (!key.toLowerCase(Locale.ROOT).contains("autofill")) continue;
+            Object value = n.getExtras().get(key);
+            hints += " " + (value instanceof Object[] ? java.util.Arrays.toString((Object[]) value) : value);
+        }
+        return SENSITIVE_INPUT.matcher(hints).find();
     }
 
     /** Block the whole interaction while a protected window is present, including touches through the keyboard. */

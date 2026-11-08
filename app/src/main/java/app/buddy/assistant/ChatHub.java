@@ -878,7 +878,7 @@ final class ChatHub {
             case "tap": return in.has("element") ? BuddyApp.str(R.string.hub_tool_tap_element, in.optInt("element"))
                     : BuddyApp.str(R.string.hub_tool_tap_point, in.optInt("x"), in.optInt("y"));
             case "long_press": return BuddyApp.str(R.string.hub_tool_long_press);
-            case "type_text": return BuddyApp.str(R.string.hub_tool_type, clip(in.optString("text"), 40));
+            case "type_text": return BuddyApp.str(R.string.activity_typing);
             case "scroll": {
                 String d = in.optString("direction"); // the tool's enum values get whole translated lines
                 switch (d) {

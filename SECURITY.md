@@ -6,6 +6,8 @@ Installers, permission controllers, Android Settings and security controls, app 
 
 A plan confirmation grants no authority to a later tool call. Protected actions ask in the executing request; approval cannot be transferred or replayed. Screen actions bind the tool arguments, target identity and readable screen to a server-generated request identity, serialize dispatch and re-check them before acting. A changed target or ended session requires a new approval.
 
+Native text entry checks password flags, input types, accessibility sensitivity, field hints and exposed autofill metadata. Sensitive entry always needs an explicit, bound human approval, even in trusted apps. Its text is shown only on the approval card; typing labels, approval notes and step logs omit the text, and typing steps have no saved screenshot. Agent vendors may retain tool arguments in their own private transcripts.
+
 ## Reporting a vulnerability
 
 Found a way for an agent to act without your approval, to approve for you, or to reach Buddy's phone tools without its token? Please don't post it publicly. Use [private vulnerability reporting](https://github.com/ghorbelhamdi/buddy-android/security/advisories/new) instead.

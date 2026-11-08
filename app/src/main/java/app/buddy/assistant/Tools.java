@@ -1295,14 +1295,17 @@ final class Tools {
         final JSONObject input;
         final AccessibilityNodeInfo target;
         final String identity;
+        final boolean typing;
         boolean needsApproval;
 
         Binding(String name, JSONObject input, AccessibilityNodeInfo target) {
             this.input = input;
             this.args = input.toString();
             this.target = target;
+            typing = name.startsWith("type_text");
             identity = identity(target);
-            description = name + " " + args + "\nTarget: " + identity;
+            description = name + " " + args + "\nTarget: " + (target != null && target.isEditable() && Guard.sensitiveInput(target)
+                    ? target.getPackageName() + "/" + target.getWindowId() + "/" + target.getViewIdResourceName() + " [sensitive field]" : identity);
         }
 
         boolean valid() {
@@ -1470,7 +1473,7 @@ final class Tools {
         Guard.remember(svc, label, pkg, app);
         if (!ruleRun() && Guard.listed(svc, "allow", label, pkg)) return null; // the user said: never ask for this one
         AccessibilityNodeInfo field = findFocusedInput();
-        CharSequence draft = field == null || field.isShowingHintText() ? null : field.getText();
+        CharSequence draft = field == null || field.isShowingHintText() || Guard.sensitiveInput(field) ? null : field.getText();
         String what = "Tap “" + (label == null ? "this" : label) + "”"; // for the agent and the reviewer
         java.util.function.Function<String, String> card = in -> tapCard(label, in); // the same, on the user's card
         boolean userAsks = Guard.listed(svc, "ask", label, pkg);
@@ -1544,7 +1547,7 @@ final class Tools {
             binding.needsApproval = true;
             summary += "\n" + binding.description;
         }
-        String answer = svc.askConfirm(summary, send);
+        String answer = binding != null && binding.typing ? svc.askInputConfirm(summary) : svc.askConfirm(summary, send);
         if (answer.startsWith("APPROVED")) return binding == null || binding.valid() ? null : CHANGED;
         if (answer.startsWith("CHANGES")) return "Not tapped: the user wants changes first. " + answer;
         return "BLOCKED by Buddy's safety rule: the user did not approve “" + what + "”. Don't retry it; "
@@ -1571,21 +1574,34 @@ final class Tools {
         if (target == null) target = findFocusedInput();
         if (target == null)
             throw new IllegalStateException("No text field is focused. Tap the text field first, then type.");
+        if (!target.refresh()) return CHANGED;
         if (Guard.offLimits(svc, target)) return "BLOCKED: that's Buddy's own screen. Only the user types there.";
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         if (!target.isFocused()) target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+        if (!target.refresh()) return CHANGED;
+        boolean sensitive = Guard.sensitiveInput(target);
+        if (sensitive && a.optBoolean("append")) return "BLOCKED: replace a sensitive field explicitly or ask the human to enter it; existing text may be masked.";
+        Binding entry = new Binding("type_text", a, target);
+        action.set(entry);
+        if (sensitive) {
+            entry.needsApproval = true;
+            String answer = svc.askInputConfirm(svc.getString(R.string.tools_card_sensitive_entry, entry.description));
+            if (!answer.startsWith("APPROVED")) return "BLOCKED: sensitive text entry requires the human's approval.";
+        }
+        if (!entry.valid()) return CHANGED;
+        if (!sensitive && Guard.sensitiveInput(target)) return "BLOCKED: field became sensitive. Request a new approval.";
         String value = text;
         CharSequence cur = target.isShowingHintText() ? null : target.getText();
         if (a.optBoolean("append")) value = (cur == null ? "" : cur.toString()) + text;
         String result;
-        if (!text.isEmpty() && !target.isPassword() && inWeb(target) && paste(target, cur, text, a.optBoolean("append"))) {
+        if (!text.isEmpty() && !sensitive && inWeb(target) && paste(target, cur, text, a.optBoolean("append"))) {
             result = "Typed " + text.length() + " characters (pasted, as this is a web page; the clipboard now holds them).";
             Thread.sleep(300);
             target.refresh();
             CharSequence now = target.isShowingHintText() ? "" : target.getText();
             String got = now == null ? "" : now.toString();
             if (!got.replaceAll("\\s+", " ").trim().equals(value.replaceAll("\\s+", " ").trim())) {
-                result += " The field now reads “" + ChatHub.clip(got, 200) + "”: check it with read_screen.";
+                result += " The field content differs from the requested text; check it with read_screen.";
             }
         } else {
             Bundle args = new Bundle();
@@ -1593,13 +1609,13 @@ final class Tools {
             boolean ok = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
             if (!ok) throw new IllegalStateException("This field did not accept text.");
             result = "Typed " + text.length() + " characters.";
-            if (!target.isPassword()) { // some fields take the text and then change or drop it
+            if (!sensitive) { // some fields take the text and then change or drop it
                 Thread.sleep(150);
                 target.refresh();
                 CharSequence now = target.isShowingHintText() ? "" : target.getText();
                 String got = now == null ? "" : now.toString();
                 if (!got.replaceAll("\\s+", " ").trim().equals(value.replaceAll("\\s+", " ").trim())) {
-                    result += " The field now reads “" + ChatHub.clip(got, 200) + "”: check it with read_screen.";
+                    result += " The field content differs from the requested text; check it with read_screen.";
                 }
             }
         }
@@ -1611,8 +1627,8 @@ final class Tools {
                     : svc.getString(R.string.tools_card_enter_in, in);
             // Hard always asks; Smart lets the reviewer decide, as for a tap the rules don't catch
             boolean send = !Guard.moneyApp(svc, target.getPackageName());
-            String blocked = "hard".equals(mode) ? guardAction("Press Enter to send", card, text, send,
-                    send && !target.isPassword() && Guard.runRule(svc, str(target.getPackageName())))
+            String blocked = sensitive || "hard".equals(mode) ? guardAction("Press Enter to send", card, text, send,
+                    !sensitive && send && Guard.runRule(svc, str(target.getPackageName())))
                     : "smart".equals(mode) ? review("Press Enter to send", card, target, text) : null;
             if (blocked != null) return result + " Not sent: " + blocked;
             Thread.sleep(150);

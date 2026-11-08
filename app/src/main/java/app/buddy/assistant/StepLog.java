@@ -69,9 +69,15 @@ final class StepLog {
         if (d == null) return;
         int n = counts.merge(chat, 1, Integer::sum);
         if (n > MAX_STEPS) return;
+        boolean typing = "type_text".equals(tool);
+        org.json.JSONArray steps = args.optJSONArray("steps");
+        for (int i = 0; steps != null && i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step != null && "type".equals(step.optString("action"))) typing = true;
+        }
         try {
             String label = ChatHub.describeTool(tool, args);
-            String first = result == null ? "" : result.trim();
+            String first = typing ? "Text entry (content redacted)" : result == null ? "" : result.trim();
             int nl = first.indexOf('\n');
             if (nl > 0) first = first.substring(0, nl);
             if (first.length() > 160) first = first.substring(0, 157) + "…";
@@ -82,6 +88,7 @@ final class StepLog {
             }
         } catch (Exception ignored) {
         }
+        if (typing) return;
         File shot = new File(d, n + ".jpg");
         shots.execute(() -> shoot(svc, shot));
     }
@@ -90,6 +97,11 @@ final class StepLog {
     private static void shoot(BuddyService svc, File out) {
         try {
             Thread.sleep(600);
+            int[] left = {350};
+            for (android.view.accessibility.AccessibilityWindowInfo w : svc.getWindows()) {
+                if (w.getType() == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
+                        && sensitive(w.getRoot(), left)) return;
+            }
             java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
             svc.takeScreenshot(Display.DEFAULT_DISPLAY, svc.getMainExecutor(), new AccessibilityService.TakeScreenshotCallback() {
                 @Override
@@ -118,5 +130,12 @@ final class StepLog {
             done.await(3, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception ignored) {
         }
+    }
+
+    private static boolean sensitive(android.view.accessibility.AccessibilityNodeInfo n, int[] left) {
+        if (n == null || --left[0] < 0) return true;
+        if (n.isEditable() && Guard.sensitiveInput(n)) return true;
+        for (int i = 0; i < n.getChildCount(); i++) if (sensitive(n.getChild(i), left)) return true;
+        return false;
     }
 }

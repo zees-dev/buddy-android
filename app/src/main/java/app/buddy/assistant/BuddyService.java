@@ -763,6 +763,10 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         return askConfirm(summary, false);
     }
 
+    String askInputConfirm(String summary) throws InterruptedException {
+        return card(summary, McpServer.CALLER_CHAT.get(), 0, 60_000, null, true);
+    }
+
     /**
      * How an approval in a notification rule's run answers when the user isn't there: such a run doesn't wait on
      * them (everything else would wait behind it).
@@ -833,6 +837,11 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
      */
     private String card(String text, String chat, int countdown, long waitMs, java.util.function.BooleanSupplier stale)
             throws InterruptedException {
+        return card(text, chat, countdown, waitMs, stale, false);
+    }
+
+    private String card(String text, String chat, int countdown, long waitMs, java.util.function.BooleanSupplier stale, boolean input)
+            throws InterruptedException {
         final CountDownLatch done = new CountDownLatch(1);
         final AtomicReference<Boolean> answer = new AtomicReference<>();
         final AtomicReference<String> change = new AtomicReference<>();
@@ -852,8 +861,11 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
                 onAnswer(true, null);
             }
         };
-        main.post(() -> bubble.askConfirm(text, chat, countdown, cb));
-        Triggers.approvalShown(this, chat, text, countdown);
+        main.post(() -> {
+            if (input) bubble.askInputConfirm(text, chat, cb);
+            else bubble.askConfirm(text, chat, countdown, cb);
+        });
+        Triggers.approvalShown(this, chat, input ? getString(R.string.activity_typing) : text, countdown);
         String ended = null;
         try {
             java.util.function.BooleanSupplier gone = McpServer.CALLER_GONE.get();
