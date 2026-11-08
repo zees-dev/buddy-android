@@ -441,8 +441,30 @@ final class Guard {
             Object value = n.getExtras().get(key);
             hints += " " + (value instanceof Object[] ? java.util.Arrays.toString((Object[]) value) : value);
         }
-        return SENSITIVE_INPUT.matcher(hints).find();
+        // Unclassified/custom editors may hide their purpose. Require a declared ordinary text input.
+        return cls == android.text.InputType.TYPE_NULL || cls == android.text.InputType.TYPE_CLASS_NUMBER
+                || SENSITIVE_INPUT.matcher(hints).find();
     }
+
+    /** Input goes to the focused application editor even when the gesture targets an IME or paste toolbar. */
+    static boolean sensitiveDestination(BuddyService svc) {
+        boolean keyboard = false, editor = false;
+        for (AccessibilityWindowInfo w : svc.getWindows()) {
+            if (w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) { keyboard = true; continue; }
+            if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+            AccessibilityNodeInfo root = w.getRoot();
+            if (root == null) return true;
+            AccessibilityNodeInfo focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (focused == null || isBuddy(focused)) continue;
+            if (focused.isEditable() || focused.getInputType() != 0 || focused.isPassword()) {
+                editor = true;
+                if (sensitiveInput(focused)) return true;
+            }
+        }
+        return keyboard && !editor;
+    }
+
+    static final String HUMAN_ENTRY = "BLOCKED: sensitive or unclassified input requires human entry. Ask the user to enter it.";
 
     /** Block the whole interaction while a protected window is present, including touches through the keyboard. */
     static boolean humanOnly(BuddyService svc) {

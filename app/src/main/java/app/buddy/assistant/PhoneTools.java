@@ -149,12 +149,15 @@ final class PhoneTools {
     }
 
     private String clipboardWrite(String text) throws Exception {
+        if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         AtomicReference<String> err = new AtomicReference<>();
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         svc.runOnMain(McpServer.effect(() -> {
             try {
                 ClipboardManager cm = (ClipboardManager) svc.getSystemService(Context.CLIPBOARD_SERVICE);
-                cm.setPrimaryClip(ClipData.newPlainText("Buddy", text));
+                if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc)) {
+                    err.set(Guard.HUMAN_ENTRY);
+                } else cm.setPrimaryClip(ClipData.newPlainText("Buddy", text));
             } catch (Exception e) {
                 err.set(String.valueOf(e.getMessage()));
             }

@@ -1314,7 +1314,7 @@ final class Tools {
 
         boolean valid() {
             return session != null && session.equals(McpServer.CALLER_SESSION.get()) && McpServer.callerActive()
-                    && svc.controlRevoked() == null && !svc.paused() && !Guard.humanOnly(svc)
+                    && svc.controlRevoked() == null && !svc.paused() && !Guard.humanOnly(svc) && !Guard.sensitiveDestination(svc)
                     && args.equals(input.toString()) && (!needsApproval || screen != null && screen.equals(screenPrint())
                     && target != null && target.refresh() && identity.equals(identity(target)));
         }
@@ -1343,6 +1343,7 @@ final class Tools {
     private String tap(JSONObject a, boolean longPress) throws Exception {
         McpServer.requireActive();
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+        if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         AccessibilityNodeInfo n = node(a);
         int x, y;
         if (n != null) {
@@ -1472,6 +1473,7 @@ final class Tools {
      */
     private String guard(AccessibilityNodeInfo element, AccessibilityNodeInfo hit) throws InterruptedException {
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+        if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         if (svc.bubble() != null && svc.bubble().confirming()) {
             return "BLOCKED: a card is waiting for the user's answer. Wait for it; don't tap anything.";
         }
@@ -1585,6 +1587,7 @@ final class Tools {
     private String typeText(JSONObject a) throws Exception {
         McpServer.requireActive();
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+        if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         String text = a.getString("text");
         AccessibilityNodeInfo target = node(a);
         if (target == null) target = findFocusedInput();
@@ -1593,26 +1596,19 @@ final class Tools {
         if (!target.refresh()) return CHANGED;
         if (Guard.offLimits(svc, target)) return "BLOCKED: that's Buddy's own screen. Only the user types there.";
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+        if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         McpServer.requireActive();
+        if (Guard.sensitiveInput(target)) return Guard.HUMAN_ENTRY;
         if (!target.isFocused()) target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
-        if (!target.refresh()) return CHANGED;
-        boolean sensitive = Guard.sensitiveInput(target);
-        if (sensitive && a.optBoolean("append")) return "BLOCKED: replace a sensitive field explicitly or ask the human to enter it; existing text may be masked.";
+        if (!target.refresh() || Guard.sensitiveInput(target)) return Guard.HUMAN_ENTRY;
         Binding entry = new Binding("type_text", a, target);
         action.set(entry);
-        if (sensitive) {
-            entry.needsApproval = true;
-            String answer = svc.askInputConfirm(svc.getString(R.string.tools_card_sensitive_entry, entry.description));
-            if (!answer.startsWith("APPROVED")) return "BLOCKED: sensitive text entry requires the human's approval.";
-            if (!entry.awaitValid()) return CHANGED;
-        }
         if (!entry.valid()) return CHANGED;
-        if (!sensitive && Guard.sensitiveInput(target)) return "BLOCKED: field became sensitive. Request a new approval.";
         String value = text;
         CharSequence cur = target.isShowingHintText() ? null : target.getText();
         if (a.optBoolean("append")) value = (cur == null ? "" : cur.toString()) + text;
         String result;
-        if (!text.isEmpty() && !sensitive && inWeb(target) && paste(target, cur, text, a.optBoolean("append"))) {
+        if (!text.isEmpty() && inWeb(target) && paste(target, cur, text, a.optBoolean("append"))) {
             result = "Typed " + text.length() + " characters (pasted, as this is a web page; the clipboard now holds them).";
             Thread.sleep(300);
             target.refresh();
@@ -1624,10 +1620,11 @@ final class Tools {
         } else {
             Bundle args = new Bundle();
             args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+            if (!entry.valid() || Guard.sensitiveInput(target)) return CHANGED;
             boolean ok = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
             if (!ok) throw new IllegalStateException("This field did not accept text.");
             result = "Typed " + text.length() + " characters.";
-            if (!sensitive) { // some fields take the text and then change or drop it
+            { // some fields take the text and then change or drop it
                 Thread.sleep(150);
                 target.refresh();
                 CharSequence now = target.isShowingHintText() ? "" : target.getText();
@@ -1645,8 +1642,8 @@ final class Tools {
                     : svc.getString(R.string.tools_card_enter_in, in);
             // Hard always asks; Smart lets the reviewer decide, as for a tap the rules don't catch
             boolean send = !Guard.moneyApp(svc, target.getPackageName());
-            String blocked = sensitive || "hard".equals(mode) ? guardAction("Press Enter to send", card, text, send,
-                    !sensitive && send && Guard.runRule(svc, str(target.getPackageName())))
+            String blocked = "hard".equals(mode) ? guardAction("Press Enter to send", card, text, send,
+                    send && Guard.runRule(svc, str(target.getPackageName())))
                     : "smart".equals(mode) ? review("Press Enter to send", card, target, text) : null;
             if (blocked != null) return result + " Not sent: " + blocked;
             Thread.sleep(150);
@@ -1673,6 +1670,7 @@ final class Tools {
      * False when the field won't paste; the caller then sets the text.
      */
     private boolean paste(AccessibilityNodeInfo target, CharSequence cur, String text, boolean append) {
+        if (Guard.sensitiveInput(target) || Guard.sensitiveDestination(svc)) return false;
         ClipboardManager cm = svc.getSystemService(ClipboardManager.class);
         if (cm == null) return false;
         int len = cur == null ? 0 : cur.length();
@@ -1766,6 +1764,7 @@ final class Tools {
      */
     private String guardStroke(AccessibilityNodeInfo element, int... xy) {
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+        if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         if (svc.bubble() != null && svc.bubble().confirming()) {
             return "BLOCKED: a card is waiting for the user's answer. Wait for it; don't touch the screen.";
         }
@@ -1782,7 +1781,7 @@ final class Tools {
             final boolean[] ok = {false};
             GestureDescription g = new GestureDescription.Builder()
                     .addStroke(new GestureDescription.StrokeDescription(path, 0, durationMs)).build();
-            if (Guard.humanOnly(svc) || svc.paused()) return false; // the user took the phone since this call began
+            if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc) || svc.paused()) return false; // the user took the phone since this call began
             for (Binding binding : bindings) if (!binding.valid()) return false;
             if (!McpServer.callerActive()) return false;
             svc.autoPauser().ownGesture(durationMs); // Buddy's own touch: not the user taking the phone
@@ -1810,6 +1809,7 @@ final class Tools {
     private String press(String button) {
         McpServer.requireActive();
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+        if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         int action;
         switch (button) {
             case "back": action = AccessibilityService.GLOBAL_ACTION_BACK; break;
