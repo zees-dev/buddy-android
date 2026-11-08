@@ -1742,8 +1742,7 @@ final class Tools {
         return "scroll".equals(name) || "swipe".equals(name) || "collect".equals(name) || "find".equals(name);
     }
 
-    /** Accessibility scrolling cannot turn a touch-down into a toggle on a protected page. */
-    private String scrollPage(String direction, AccessibilityNodeInfo n) throws InterruptedException {
+    private AccessibilityNodeInfo scrollTarget(AccessibilityNodeInfo n) {
         if (n == null || !n.isScrollable()) {
             for (AccessibilityWindowInfo w : svc.getWindows()) {
                 if (w.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
@@ -1752,6 +1751,12 @@ final class Tools {
                 if (n != null) break;
             }
         }
+        return n;
+    }
+
+    /** Accessibility scrolling cannot turn a touch-down into a Settings toggle. */
+    private String scrollPage(String direction, AccessibilityNodeInfo n) throws InterruptedException {
+        n = scrollTarget(n);
         int command = "up".equals(direction) || "left".equals(direction)
                 ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;
         McpServer.requireActive();
@@ -1808,13 +1813,16 @@ final class Tools {
 
     private String swipe(JSONObject a) throws Exception {
         int x1 = a.getInt("x1"), y1 = a.getInt("y1"), x2 = a.getInt("x2"), y2 = a.getInt("y2");
-        if (Guard.humanOnly(svc)
-                && Math.hypot(x2 - x1, y2 - y1) > ViewConfiguration.get(svc).getScaledTouchSlop())
-            return scrollPage(Math.abs(y2 - y1) >= Math.abs(x2 - x1)
-                    ? (y2 < y1 ? "down" : "up") : (x2 < x1 ? "right" : "left"), null);
         // A stroke too short to scroll anything lands as a tap, so it gets every check a tap gets
         int slop = ViewConfiguration.get(svc).getScaledTouchSlop();
         boolean tap = Math.hypot(x2 - x1, y2 - y1) <= slop;
+        if (Guard.humanOnly(svc) || Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))) {
+            AccessibilityNodeInfo n = scrollTarget(null);
+            if (!tap && n != null)
+                return scrollPage(Math.abs(y2 - y1) >= Math.abs(x2 - x1)
+                        ? (y2 < y1 ? "down" : "up") : (x2 < x1 ? "right" : "left"), n);
+            return tap(new JSONObject().put("x", x1).put("y", y1), false);
+        }
         Binding binding = new Binding("swipe", a, Guard.nodeAt(svc.getWindows(), x1, y1));
         action.set(binding);
         String blocked = tap ? guard(null, Guard.nodeAt(svc.getWindows(), x1, y1)) : guardStroke(null, x1, y1, x2, y2);
@@ -1838,8 +1846,13 @@ final class Tools {
             return "BLOCKED: a card is waiting for the user's answer. Wait for it; don't touch the screen.";
         }
         boolean off = element != null && Guard.offLimits(svc, element);
+        if (!Guard.settingsTarget(svc, element)) return HUMAN_ONLY;
         List<AccessibilityWindowInfo> windows = svc.getWindows();
-        for (int i = 0; !off && i + 1 < xy.length; i += 2) off = Guard.offLimits(svc, Guard.nodeAt(windows, xy[i], xy[i + 1]));
+        for (int i = 0; !off && i + 1 < xy.length; i += 2) {
+            AccessibilityNodeInfo hit = Guard.nodeAt(windows, xy[i], xy[i + 1]);
+            if (!Guard.settingsTarget(svc, hit)) return HUMAN_ONLY;
+            off = Guard.offLimits(svc, hit);
+        }
         return off ? "BLOCKED: that's one of Buddy's own screens. Only the user touches those." : guardInput();
     }
 
