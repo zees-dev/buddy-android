@@ -385,7 +385,8 @@ final class Tools {
             String held = svc.awaitResume(name);
             if (held != null) return text(held);
         }
-        if (ACTIONS.contains(name) && Guard.humanOnly(svc)) return text(HUMAN_ONLY);
+        if (ACTIONS.contains(name) && Guard.humanOnly(svc)
+                && !("press".equals(name) && Guard.shadeDismissal(svc, a.optString("button")))) return text(HUMAN_ONLY);
         McpServer.requireActive();
         svc.onToolActivity(name);
         String step = activity(name, a);
@@ -1813,8 +1814,10 @@ final class Tools {
 
     private String press(String button) {
         McpServer.requireActive();
-        if (Guard.humanOnly(svc)) return HUMAN_ONLY;
-        if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
+        if (!Guard.shadeDismissal(svc, button)) {
+            if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+            if (Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
+        }
         int action;
         switch (button) {
             case "back": action = AccessibilityService.GLOBAL_ACTION_BACK; break;

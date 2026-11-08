@@ -582,6 +582,18 @@ final class Guard {
 
     static final String HUMAN_ENTRY = "BLOCKED: sensitive or unclassified input requires human entry. Ask the user to enter it.";
 
+    /** Back and Home dismiss the shade without operating any quick-settings tile. */
+    static boolean shadeDismissal(BuddyService svc, String button) {
+        if (!("back".equals(button) || "home".equals(button)) || Triggers.locked(svc)) return false;
+        for (AccessibilityWindowInfo w : svc.getWindows()) {
+            AccessibilityNodeInfo root = w.getRoot();
+            if (w.getType() == AccessibilityWindowInfo.TYPE_SYSTEM && w.isActive() && root != null
+                    && "com.android.systemui".contentEquals(String.valueOf(root.getPackageName()))
+                    && "NotificationShade".contentEquals(String.valueOf(w.getTitle()))) return true;
+        }
+        return false;
+    }
+
     /** Block the whole interaction while a protected window is present, including touches through the keyboard. */
     static boolean humanOnly(BuddyService svc) {
         if (Triggers.locked(svc) || sensitivePackage(svc, svc.foregroundPkg())) return true;
