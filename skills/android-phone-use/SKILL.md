@@ -68,4 +68,6 @@ The CLI form stores the expanded token; protect the file and keep it out of git.
 
 Buddy's optional background browser is a separate trust boundary. Leave it disabled for this workflow.
 
+For Play Store catalog browsing, use `open_app` with `com.android.vending`, then `open_url` with `market://search?q=...` or `market://details?id=...`. URL-encode search text and use a verified package id for details. Read, screenshot and scroll the catalog. Store taps, typing, short strokes, purchases, installs, updates and account controls remain human-only; do not try another input path after a refusal. Search links permit only `q` and optional `c=apps`; details permits only `id`.
+
 Codex MCP reference: https://learn.chatgpt.com/docs/extend/mcp?surface=cli

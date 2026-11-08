@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** The phone-control tools exposed to the agents (Claude Code, Codex, OpenCode, Antigravity, Grok) over MCP. */
 final class Tools {
     private static final int MAX_NODES = 350;
+    private static final String PLAY_STORE = "com.android.vending";
     /** Screenshots are scaled so their shorter side is at most this, the same in portrait and landscape. */
     private static final int SCREENSHOT_SHORT_SIDE = 720;
 
@@ -115,7 +116,7 @@ final class Tools {
                 "Open a link on the phone the way tapping it would: https:// pages open in the user's browser or "
                         + "in the app that handles them (a YouTube link in YouTube), and deep links open their app "
                         + "(mailto: an email draft, tel: the dialer with the number, geo: or a maps link a map, "
-                        + "market:// the Play Store). Nothing is sent or called by opening a link. For public web pages "
+                        + "market://search?q=... or market://details?id=... for Play Store browsing; its buttons remain human-only). Nothing is sent or called by opening a link. For public web pages "
                         + "you only need to read, the browser_* tools work without taking over the screen. Returns "
                         + "\"Opened\"; call read_screen to see it.",
                 props().put("url", strProp("The URL or deep link, e.g. https://example.com or tel:+491234")), "url"));
@@ -385,7 +386,9 @@ final class Tools {
             if (held != null) return text(held);
         }
         if (ACTIONS.contains(name) && Guard.humanOnly(svc)
-                && !(scrolling(name) || "do_steps".equals(name) || "open_app".equals(name) || "press".equals(name) && ("back".equals(a.optString("button")) || "home".equals(a.optString("button"))))) return text(HUMAN_ONLY);
+                && !(scrolling(name) || "do_steps".equals(name) || "open_app".equals(name)
+                || "open_url".equals(name) && playStoreBrowse(Uri.parse(a.optString("url")))
+                || "press".equals(name) && ("back".equals(a.optString("button")) || "home".equals(a.optString("button"))))) return text(HUMAN_ONLY);
         McpServer.requireActive();
         svc.onToolActivity(name);
         String step = activity(name, a);
@@ -1952,7 +1955,7 @@ final class Tools {
         }
         String best = top.get(0)[0];
         String bestLabel = top.get(0)[1];
-        if (Guard.sensitivePackage(svc, best))
+        if (Guard.sensitivePackage(svc, best) && !PLAY_STORE.equals(best))
             return HUMAN_ONLY;
         Intent launch = pm.getLaunchIntentForPackage(best);
         if (launch == null) return "App " + bestLabel + " cannot be launched.";
@@ -2101,11 +2104,42 @@ final class Tools {
         return sb.toString();
     }
 
+    /** Only catalog links may launch the Store; none can grant input or installation authority. */
+    private static boolean playStoreBrowse(Uri uri) {
+        if (!uri.isHierarchical() || uri.getHost() == null || !uri.getHost().equals(uri.getEncodedAuthority())
+                || uri.getFragment() != null) return false;
+        String route;
+        if ("market".equals(uri.getScheme()) && (uri.getPath() == null || uri.getPath().isEmpty())) route = uri.getHost();
+        else if ("https".equals(uri.getScheme()) && "play.google.com".equals(uri.getHost())) {
+            route = "/store/search".equals(uri.getPath()) ? "search"
+                    : "/store/apps/details".equals(uri.getPath()) ? "details" : null;
+        } else return false;
+        String key = "search".equals(route) ? "q" : "details".equals(route) ? "id" : null;
+        if (key == null) return false;
+        String query = uri.getEncodedQuery();
+        if (query == null) return false;
+        for (String part : query.split("&", -1)) {
+            int end = part.indexOf('=');
+            String name = end < 0 ? part : part.substring(0, end);
+            if (key.equals(name)) continue;
+            if (!"q".equals(key) || !"c".equals(name) || !uri.getQueryParameters(name).equals(Collections.singletonList("apps"))) return false;
+        }
+        List<String> values = uri.getQueryParameters(key);
+        return values.size() == 1 && !values.get(0).trim().isEmpty()
+                && ("q".equals(key) || values.get(0).matches("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+"));
+    }
+
     private String openUrl(String url) throws InterruptedException {
-        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Uri uri = Uri.parse(url);
+        boolean store = playStoreBrowse(uri);
+        if (!store && ("market".equals(uri.getScheme()) || "play.google.com".equals(uri.getHost()))) return HUMAN_ONLY;
+        Intent i = new Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (store) i.setPackage(PLAY_STORE);
         ResolveInfo to = svc.getPackageManager().resolveActivity(i, 0);
+        if (store && (to == null || to.activityInfo == null)) return "Not opened: Play Store has no handler for this catalog link.";
         if (to != null && to.activityInfo != null && Guard.settingsPackage(svc, to.activityInfo.packageName)) return HUMAN_ONLY;
-        if (to != null && to.activityInfo != null && Guard.sensitivePackage(svc, to.activityInfo.packageName))
+        if (to != null && to.activityInfo != null && Guard.sensitivePackage(svc, to.activityInfo.packageName)
+                && !(store && PLAY_STORE.equals(to.activityInfo.packageName)))
             return HUMAN_ONLY;
         McpServer.requireActive();
         svc.startActivity(i);
