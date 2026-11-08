@@ -125,42 +125,47 @@ final class McpServer {
                     while (ready.hasNext()) {
                         java.nio.channels.SelectionKey key = ready.next();
                         ready.remove();
-                        if (key.isAcceptable()) {
-                            java.nio.channels.SocketChannel channel = listener.accept();
-                            if (channel == null) continue;
-                            // Incomplete headers occupy bounded buffers, never execution workers.
-                            if (selector.keys().size() > 128) { channel.close(); continue; }
-                            channel.configureBlocking(false);
-                            clients.add(channel.socket());
-                            channel.register(selector, java.nio.channels.SelectionKey.OP_READ, new Admission());
-                        } else if (key.isReadable()) {
-                            java.nio.channels.SocketChannel channel = (java.nio.channels.SocketChannel) key.channel();
-                            Admission admission = (Admission) key.attachment();
-                            try {
-                                int n = channel.read(admission.bytes);
-                                if (n < 0) throw new IOException("incomplete headers");
-                                int end = admission.headerEnd();
-                                if (end < 0) {
-                                    if (!admission.bytes.hasRemaining()) throw new IOException("headers too large");
-                                    continue;
+                        try {
+                            if (!key.isValid()) continue;
+                            if (key.isAcceptable()) {
+                                java.nio.channels.SocketChannel channel = listener.accept();
+                                if (channel == null) continue;
+                                // Incomplete headers occupy bounded buffers, never execution workers.
+                                if (selector.keys().size() > 128) { channel.close(); continue; }
+                                channel.configureBlocking(false);
+                                clients.add(channel.socket());
+                                channel.register(selector, java.nio.channels.SelectionKey.OP_READ, new Admission());
+                            } else if (key.isReadable()) {
+                                java.nio.channels.SocketChannel channel = (java.nio.channels.SocketChannel) key.channel();
+                                Admission admission = (Admission) key.attachment();
+                                try {
+                                    int n = channel.read(admission.bytes);
+                                    if (n < 0) throw new IOException("incomplete headers");
+                                    int end = admission.headerEnd();
+                                    if (end < 0) {
+                                        if (!admission.bytes.hasRemaining()) throw new IOException("headers too large");
+                                        continue;
+                                    }
+                                    byte[] prefix = java.util.Arrays.copyOf(admission.bytes.array(), admission.bytes.position());
+                                    if (!admitted(prefix, end)) {
+                                        channel.write(java.nio.ByteBuffer.wrap(("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                                .getBytes(StandardCharsets.US_ASCII)));
+                                        throw new IOException("unauthorized");
+                                    }
+                                    key.cancel();
+                                    channel.configureBlocking(true);
+                                    Socket s = channel.socket();
+                                    clients.add(s);
+                                    try { pool.execute(() -> handle(s, prefix)); }
+                                    catch (RejectedExecutionException e) { clients.remove(s); s.close(); }
+                                } catch (IOException e) {
+                                    key.cancel();
+                                    clients.remove(channel.socket());
+                                    channel.close();
                                 }
-                                byte[] prefix = java.util.Arrays.copyOf(admission.bytes.array(), admission.bytes.position());
-                                if (!admitted(prefix, end)) {
-                                    channel.write(java.nio.ByteBuffer.wrap(("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                                            .getBytes(StandardCharsets.US_ASCII)));
-                                    throw new IOException("unauthorized");
-                                }
-                                key.cancel();
-                                channel.configureBlocking(true);
-                                Socket s = channel.socket();
-                                clients.add(s);
-                                try { pool.execute(() -> handle(s, prefix)); }
-                                catch (RejectedExecutionException e) { clients.remove(s); s.close(); }
-                            } catch (IOException e) {
-                                key.cancel();
-                                clients.remove(channel.socket());
-                                channel.close();
                             }
+                        } catch (java.nio.channels.CancelledKeyException ignored) {
+                            // Rotation can close an admitted or pending socket during this selection pass.
                         }
                     }
                     for (java.nio.channels.SelectionKey key : selector.keys()) {
