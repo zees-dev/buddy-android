@@ -1484,6 +1484,9 @@ final class Tools {
                 || hit == null && Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))) return HUMAN_ONLY;
         AccessibilityNodeInfo target = element != null ? element : hit;
         if (target == null) return null;
+        if (Guard.sensitiveDigit(svc, target) || Guard.sensitiveDigit(svc, hit))
+            return guardAction("Enter a digit on a sensitive keypad", in -> "Enter a digit on a sensitive keypad",
+                    null, false, false);
         String pkg = str(target.getPackageName());
         String mode = mode(pkg);
         if ("trust".equals(mode)) return null;

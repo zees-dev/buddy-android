@@ -491,9 +491,47 @@ final class Guard {
     }
 
     private static final Pattern SENSITIVE_INPUT = Pattern.compile(
-            "(?i)password|passcode|one.?time|otp|verification.?code|credit.?card|card.?number|cc-|cvc|cvv|security.?code|\\bpin\\b");
+            "(?iu)password|passcode|one.?time|otp|verification.?code|credit.?card|card.?number|cc-|cvc|cvv|security.?code|(?:^|[^a-z])pin(?:$|[^a-z])|"
+            + "密码|密碼|口令|验证码|驗證碼|校验码|校驗碼|动态码|動態碼|認証コード|暗証番号|パスワード|비밀번호|인증.?번호|인증.?코드|"
+            + "mot.de.passe|code.d.accès|code.de.vérification|passwort|kennwort|bestätigungscode|contraseña|código.de.verificación|"
+            + "senha|código.de.verificação|codice.di.verifica|wachtwoord|verificatiecode|hasło|kod.weryfikacyjny|пароль|код.подтверждения|"
+            + "парол|код.підтвердження|şifre|doğrulama.kodu|पासवर्ड|पिन|सत्यापन|kata.sandi|kode.verifikasi|mật.khẩu|mã.xác.minh|كلمة.المرور|رمز.التحقق");
     private static final Pattern ORDINARY_INPUT = Pattern.compile(
             "(?i)^(message|search|title|notes?|subject|comment|reply|compose|description|filename|file name|query)([ .…:_-].*)?$");
+
+    /** App-owned keypads have no focused editor or IME. Require both credential evidence and a digit pad. */
+    static boolean sensitiveDigit(BuddyService svc, AccessibilityNodeInfo target) {
+        if (digit(target) < 0) return false;
+        for (AccessibilityWindowInfo w : svc.getWindows()) {
+            if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION || w.getId() != target.getWindowId()) continue;
+            int[] surface = new int[2];
+            keypad(w.getRoot(), surface, 0);
+            if (surface[0] != 0 && Integer.bitCount(surface[1]) >= 6) return true;
+        }
+        return false;
+    }
+
+    private static int digit(AccessibilityNodeInfo n) {
+        for (int depth = 0; n != null && depth < 4; depth++, n = n.getParent()) {
+            for (CharSequence label : new CharSequence[]{n.getText(), n.getContentDescription()}) {
+                if (label == null) continue;
+                String s = label.toString().trim();
+                if (s.length() == 1 && Character.isDigit(s.charAt(0))) return Character.digit(s.charAt(0), 10);
+            }
+            if (n.isClickable()) break;
+        }
+        return -1;
+    }
+
+    private static void keypad(AccessibilityNodeInfo n, int[] surface, int depth) {
+        if (n == null || depth > 30 || !n.isVisibleToUser()) return;
+        String metadata = n.getText() + " " + n.getHintText() + " " + n.getViewIdResourceName() + " " + n.getContentDescription();
+        if (n.isPassword() || android.os.Build.VERSION.SDK_INT >= 34 && n.isAccessibilityDataSensitive()
+                || SENSITIVE_INPUT.matcher(metadata).find() || metadata.matches(".*[●•○◦]{3,}.*")) surface[0] = 1;
+        int d = digit(n);
+        if (d >= 0) surface[1] |= 1 << d;
+        for (int i = 0; i < n.getChildCount(); i++) keypad(n.getChild(i), surface, depth + 1);
+    }
 
     /** Accessibility does not expose View autofill hints uniformly; also check input types, hints and exposed extras. */
     static boolean sensitiveInput(AccessibilityNodeInfo n) {
