@@ -477,19 +477,36 @@ final class Guard {
                 && BuildInfo.class.getPackage().getName().contentEquals(n.getPackageName());
     }
 
-    /**
-     * Must the agent keep out of this node? All of Buddy's UI, unless the user turned on "Let agents tap Buddy's
-     * screens"; even then the protected parts (Ui.protect: approval cards, App permissions, the developer
-     * switches) stay off-limits. The bubble and its card are overlays that taps never land on (see nodeAt).
-     */
+    /** Installers, security settings and Buddy are human-only, regardless of app trust or saved exceptions. */
+    static boolean sensitivePackage(android.content.Context c, CharSequence pkg) {
+        if (pkg == null) return true;
+        String p = pkg.toString();
+        if (NEVER_ALLOWED.matcher(p).find() || p.equals(c.getPackageName()) || p.equals("android")
+                || p.equals("com.android.systemui")) return true;
+        android.content.pm.PackageManager pm = c.getPackageManager();
+        android.content.pm.ResolveInfo permissions = pm.resolveActivity(
+                new android.content.Intent("android.intent.action.MANAGE_PERMISSIONS"), 0);
+        if (permissions != null && permissions.activityInfo != null && p.equals(permissions.activityInfo.packageName)) return true;
+        android.content.Intent install = new android.content.Intent(android.content.Intent.ACTION_VIEW)
+                .setDataAndType(android.net.Uri.parse("content://" + c.getPackageName() + "/install.apk"),
+                        "application/vnd.android.package-archive");
+        android.content.pm.ResolveInfo to = pm.resolveActivity(install, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+        return to != null && to.activityInfo != null && p.equals(to.activityInfo.packageName);
+    }
+
     static boolean offLimits(android.content.Context c, AccessibilityNodeInfo n) {
-        if (!isBuddy(n)) return false;
-        if (!Prefs.agentsTapBuddy(c)) return true;
-        AccessibilityNodeInfo cur = n;
-        for (int i = 0; cur != null && i < 60; i++) {
-            if (cur.getExtras().getBoolean(Ui.PROTECTED, false)) return true;
-            if (cur.getWindow() != null && cur.getWindow().getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) return true;
-            cur = cur.getParent();
+        return n != null && sensitivePackage(c, n.getPackageName());
+    }
+
+    /** Block the whole interaction while a protected window is present, including touches through the keyboard. */
+    static boolean humanOnly(BuddyService svc) {
+        if (Triggers.locked(svc) || sensitivePackage(svc, svc.foregroundPkg())) return true;
+        for (AccessibilityWindowInfo w : svc.getWindows()) {
+            int type = w.getType();
+            if (type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY || type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue;
+            if (type != AccessibilityWindowInfo.TYPE_APPLICATION && !w.isActive() && !w.isFocused()) continue;
+            AccessibilityNodeInfo root = w.getRoot();
+            if (root == null || offLimits(svc, root)) return true;
         }
         return false;
     }

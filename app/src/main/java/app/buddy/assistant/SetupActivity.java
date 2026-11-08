@@ -764,12 +764,6 @@ public class SetupActivity extends Screen implements Account.Listener, RemoteSes
             Prefs.setDevMode(this, on);
             render();
         })), full());
-        ex.addView(divider(), lineParams());
-        ex.addView(protect(switchRow(this, getString(R.string.setup_agents_tap), getString(R.string.setup_agents_tap_info),
-                Prefs.agentsTapBuddy(this), on -> {
-            Prefs.setAgentsTapBuddy(this, on);
-            render();
-        })), full());
         if (dev) {
             LinearLayout.LayoutParams wp = full();
             wp.setMargins(dp(this, 12), 0, dp(this, 12), dp(this, 12));

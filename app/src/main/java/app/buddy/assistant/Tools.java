@@ -375,6 +375,7 @@ final class Tools {
             String held = svc.awaitResume(name);
             if (held != null) return text(held);
         }
+        if (ACTIONS.contains(name) && Guard.humanOnly(svc)) return text(HUMAN_ONLY);
         svc.onToolActivity(name);
         String step = activity(name, a);
         if (step != null) svc.showActivity(step, null);
@@ -1291,7 +1292,10 @@ final class Tools {
 
     // ------------------------------------------------------------- actions
 
+    private static final String HUMAN_ONLY = "BLOCKED: installers, permissions, security settings and Buddy controls require the human. Ask the user to do this step.";
+
     private String tap(JSONObject a, boolean longPress) throws Exception {
+        if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         AccessibilityNodeInfo n = node(a);
         int x, y;
         if (n != null) {
@@ -1414,6 +1418,7 @@ final class Tools {
      * element: what the agent aimed at (may be null); hit: what's actually under the finger.
      */
     private String guard(AccessibilityNodeInfo element, AccessibilityNodeInfo hit) throws InterruptedException {
+        if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         if (svc.bubble() != null && svc.bubble().confirming()) {
             return "BLOCKED: a card is waiting for the user's answer. Wait for it; don't tap anything.";
         }
@@ -1522,12 +1527,14 @@ final class Tools {
     }
 
     private String typeText(JSONObject a) throws Exception {
+        if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         String text = a.getString("text");
         AccessibilityNodeInfo target = node(a);
         if (target == null) target = findFocusedInput();
         if (target == null)
             throw new IllegalStateException("No text field is focused. Tap the text field first, then type.");
         if (Guard.offLimits(svc, target)) return "BLOCKED: that's Buddy's own screen. Only the user types there.";
+        if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         if (!target.isFocused()) target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
         String value = text;
         CharSequence cur = target.isShowingHintText() ? null : target.getText();
@@ -1569,6 +1576,7 @@ final class Tools {
                     : "smart".equals(mode) ? review("Press Enter to send", card, target, text) : null;
             if (blocked != null) return result + " Not sent: " + blocked;
             Thread.sleep(150);
+            if (Guard.humanOnly(svc)) return HUMAN_ONLY;
             boolean sent = target.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
             result += sent ? " Pressed enter." : " Enter action not supported here; tap the send button instead.";
         }
@@ -1678,6 +1686,7 @@ final class Tools {
      * points it touches): no touching while a card waits, and never on Buddy's own screens. null when it may go.
      */
     private String guardStroke(AccessibilityNodeInfo element, int... xy) {
+        if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         if (svc.bubble() != null && svc.bubble().confirming()) {
             return "BLOCKED: a card is waiting for the user's answer. Wait for it; don't touch the screen.";
         }
@@ -1694,7 +1703,7 @@ final class Tools {
             final boolean[] ok = {false};
             GestureDescription g = new GestureDescription.Builder()
                     .addStroke(new GestureDescription.StrokeDescription(path, 0, durationMs)).build();
-            if (svc.paused()) return false; // the user took the phone since this call began
+            if (Guard.humanOnly(svc) || svc.paused()) return false; // the user took the phone since this call began
             svc.autoPauser().ownGesture(durationMs); // Buddy's own touch: not the user taking the phone
             boolean dispatched = svc.dispatchGesture(g, new AccessibilityService.GestureResultCallback() {
                 @Override
@@ -1718,6 +1727,7 @@ final class Tools {
     }
 
     private String press(String button) {
+        if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         int action;
         switch (button) {
             case "back": action = AccessibilityService.GLOBAL_ACTION_BACK; break;
@@ -1769,9 +1779,8 @@ final class Tools {
         }
         String best = top.get(0)[0];
         String bestLabel = top.get(0)[1];
-        // Buddy's own screens hold the safety settings: only the user opens them (unless they let agents in)
-        if (best.equals(svc.getPackageName()) && !Prefs.agentsTapBuddy(svc))
-            return "BLOCKED: agents can't open Buddy itself. Only the user uses Buddy's screens.";
+        if (Guard.sensitivePackage(svc, best))
+            return HUMAN_ONLY;
         Intent launch = pm.getLaunchIntentForPackage(best);
         if (launch == null) return "App " + bestLabel + " cannot be launched.";
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
@@ -1919,9 +1928,8 @@ final class Tools {
     private String openUrl(String url) throws InterruptedException {
         Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         ResolveInfo to = svc.getPackageManager().resolveActivity(i, 0);
-        if (to != null && to.activityInfo != null && svc.getPackageName().equals(to.activityInfo.packageName)
-                && !Prefs.agentsTapBuddy(svc))
-            return "BLOCKED: that link opens Buddy itself. Only the user uses Buddy's screens.";
+        if (to != null && to.activityInfo != null && Guard.sensitivePackage(svc, to.activityInfo.packageName))
+            return HUMAN_ONLY;
         svc.startActivity(i);
         Thread.sleep(1500);
         return "Opened " + url + ". Call read_screen to see it.";

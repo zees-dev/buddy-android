@@ -2,6 +2,8 @@
 
 Buddy lets AI agents use your phone, so its approval rules are its most important part: an agent must not send, post, buy, pay or delete anything without your OK on Buddy's card.
 
+Installers, permission controllers, Android Settings and security controls, app stores, the system shade and Buddy's own UI are human-only. Phone input stops while these surfaces are present, including coordinate gestures and keyboard actions, regardless of saved app trust. Installing or updating an APK always requires the human to use Android's installer.
+
 ## Reporting a vulnerability
 
 Found a way for an agent to act without your approval, to approve for you, or to reach Buddy's phone tools without its token? Please don't post it publicly. Use [private vulnerability reporting](https://github.com/ghorbelhamdi/buddy-android/security/advisories/new) instead.

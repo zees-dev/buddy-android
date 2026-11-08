@@ -65,18 +65,6 @@ final class Prefs {
         sp(c).edit().putString("backend", backend).apply();
     }
 
-    /**
-     * Agents (any MCP client, e.g. Claude Code testing Buddy) may tap and type in Buddy's own screens, except the
-     * bubble, approval cards, App permissions and the developer switches. Off by default.
-     */
-    static boolean agentsTapBuddy(Context c) {
-        return sp(c).getBoolean("agents_tap_buddy", false);
-    }
-
-    static void setAgentsTapBuddy(Context c, boolean on) {
-        sp(c).edit().putBoolean("agents_tap_buddy", on).apply();
-    }
-
     /** Notify when a new Buddy release is out (checked about once a day). */
     static boolean updateNotices(Context c) {
         return !Flavor.FDROID && sp(c).getBoolean("update_notices", true);
