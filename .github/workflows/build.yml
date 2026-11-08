@@ -13,25 +13,25 @@ permissions:
 jobs:
   # buddy-run's translation of each agent's output, on recorded runs (linux/test/run.sh); jq comes with the runner
   helper-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Test the helper on recorded agent output
         run: bash linux/test/run.sh
 
   apk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true # proot and libandroid-shmem (third_party/)
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "21.0.11+10"
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
 
       # proot, talloc, libandroid-shmem and the pty helper, from source with a fixed NDK
       - name: Build native libraries
@@ -71,7 +71,7 @@ jobs:
           echo "FDROID_APK=$PWD/dist/fdroid-check-only-${GITHUB_REF_NAME//\//-}.apk" >> "$GITHUB_ENV"
           ls -l dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: buddy-apk
           path: dist/*.apk
@@ -97,18 +97,23 @@ jobs:
 
       # What F-Droid will do: build the fdroid APK again, unsigned, somewhere else, and check it matches the signed one
       # above but for the signature. After publishing, so a mismatch shows up red without holding the release back.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
           path: rebuild-check # a second copy at another path, as F-Droid's build machine would have
 
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.13.5"
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+          python-version: "3.13.9"
+
       - name: Check the F-Droid APK is reproducible
         run: |
-          pip install --quiet apksigcopier
-          export PATH="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1):$PATH" # apksigner
+          export PATH="$ANDROID_HOME/build-tools/36.0.0:$PATH" # apksigner
           cd rebuild-check
           ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" native/build.sh
           env -u BUDDY_KEYSTORE ./gradlew --no-daemon assembleFdroidRelease
           unsigned=$(find app/build/outputs/apk/fdroid/release -name '*.apk' | head -1)
-          apksigcopier compare --unsigned "$FDROID_APK" "$unsigned"
+          uv run --project .github/repro --locked --no-dev apksigcopier compare --unsigned "$FDROID_APK" "$unsigned"
           echo "The F-Droid APK is reproducible"
