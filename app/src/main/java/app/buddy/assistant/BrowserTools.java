@@ -248,7 +248,7 @@ final class BrowserTools {
         if (!allow && (Guard.listed(svc, "ask", label, null) || (Prefs.guardBuiltin(svc) && risky != null))) {
             String name = label.isEmpty() ? risky : label;
             String blocked = approve("Tap “" + name + "”", svc.getString(R.string.browser_card_tap, name, host),
-                    t.optString("draft", ""), Guard.sendsText(name));
+                    t.optString("draft", ""));
             if (blocked != null) return blocked;
             approved = true;
         }
@@ -338,7 +338,7 @@ final class BrowserTools {
         String sendLabel = f.optString("submitLabel", "");
         boolean risky = !f.optBoolean("search") && (f.optBoolean("multiline") || Guard.riskyText(sendLabel) != null);
         if (risky && Prefs.guardBuiltin(svc)) {
-            String blocked = approve("Press Enter to send", svc.getString(R.string.browser_card_enter, host(key)), text, true);
+            String blocked = approve("Press Enter to send", svc.getString(R.string.browser_card_enter, host(key)), text);
             if (blocked != null) return result + " Not sent: " + blocked;
         }
         String[] before = Browser.page(key);
@@ -454,12 +454,11 @@ final class BrowserTools {
     }
 
     /**
-     * A risky action needs the user's OK: the agent's confirm just before, or a card now. Null when it may go ahead,
+     * A risky action needs the user's OK on its own card. Null when it may go ahead,
      * otherwise the tool's answer. what: the action in English, for the agent; card: the card's line; draft: text it
      * would send, shown on the card (may be empty).
      */
-    private String approve(String what, String card, String draft, boolean send) throws InterruptedException {
-        if (Guard.takeApproval(send)) return null;
+    private String approve(String what, String card, String draft) throws InterruptedException {
         String summary = draft == null || draft.trim().isEmpty() ? card
                 : svc.getString(R.string.tools_card_detail, card, svc.getString(R.string.tools_card_quote, ChatHub.clip(draft.trim(), 300)));
         String answer = svc.askConfirm(summary, false);

@@ -286,11 +286,6 @@ final class Guard {
     private Guard() {
     }
 
-    /** Plan confirmations never grant authority to another action. Kept for the optional browser caller. */
-    static boolean takeApproval(boolean send) {
-        return false;
-    }
-
     /**
      * Does tapping this send or post a message (and nothing more, like paying or deleting)? Never in a payment, bank or
      * crypto app, where "Send" can mean sending money.
@@ -320,9 +315,6 @@ final class Guard {
     /** Apps a run rule never covers, whatever the user picks: settings, permissions, app stores and installers. */
     private static final Pattern NEVER_ALLOWED = Pattern.compile(
             "(?i)(settings|permission|security|installer|vending|store|market|^com\\.google\\.android\\.gms$)");
-    /** Words in a confirm's text that a run rule never approves (the rest of RISKY is checked too). */
-    private static final Pattern NEVER_WORDS = Pattern.compile(
-            "(?iu)(?<![\\p{L}])(install\\w*|passwords?|passcode|pin|otp|codes?|security|permissions?|bank\\w*|cards?|iban|money)(?![\\p{L}])|[€$£¥₹]");
 
     /**
      * Can this app go on a chat's "Allowed without asking"? Not payment, bank or crypto apps (see moneyApp), nor
@@ -342,25 +334,6 @@ final class Guard {
         String chat = McpServer.CALLER_CHAT.get();
         if (chat == null || Triggers.ruleRun(chat) || !allowable(c, pkg)) return false;
         return ChatHub.get(c).allowedFor(chat).contains(pkg);
-    }
-
-    /**
-     * A confirm's text a run rule may approve: nothing in it pays, buys, deletes, installs, or names a password, code,
-     * card or security setting. Sending is fine. Every word is checked as a button label would be.
-     */
-    static boolean routineText(String s) {
-        if (s == null || s.trim().isEmpty() || NEVER_WORDS.matcher(s).find()) return false;
-        for (int i = 0; i < s.length(); i++) {
-            int cp = s.codePointAt(i);
-            if (!Character.isLetter(cp)) continue;
-            Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
-            boolean noSpaces = sc == Character.UnicodeScript.HAN || sc == Character.UnicodeScript.HIRAGANA
-                    || sc == Character.UnicodeScript.KATAKANA || sc == Character.UnicodeScript.HANGUL;
-            if (i > 0 && Character.isLetter(s.codePointBefore(i)) && !noSpaces) continue; // a word's start only
-            String from = s.substring(i);
-            if (RISKY.matcher(from).find() && !SEND.matcher(from).find()) return false;
-        }
-        return true;
     }
 
     /** What a tap at (x, y) would hit: the topmost app window's deepest node there. */
@@ -645,12 +618,6 @@ final class Guard {
         java.util.regex.Matcher m = RISKY_ID.matcher("_" + ids.toLowerCase(Locale.ROOT).replace(' ', '_'));
         while (m.find()) if (!"submit".equals(m.group(1))) return true; // on the web, every form's button is "submit"
         return false;
-    }
-
-    /** A web page button that sends or posts a message (see sends). */
-    static boolean sendsText(String label) {
-        String l = riskyText(label);
-        return l != null && SEND.matcher(l).find();
     }
 
     private static String risky(AccessibilityNodeInfo n) {
