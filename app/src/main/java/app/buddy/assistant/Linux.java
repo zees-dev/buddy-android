@@ -88,12 +88,12 @@ final class Linux {
                 "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"));
         // Existing environments also pass this gate before any installed agent can run. apk verifies signatures.
         a.addAll(Arrays.asList("/bin/sh", "-c",
-                "if [ ! -f /etc/buddy/base-upgraded-v1 ]; then "
-                + "mkdir -p /etc/buddy && mkdir /tmp/buddy-base-upgrade.lock || exit 1; "
-                + "trap 'rmdir /tmp/buddy-base-upgrade.lock' EXIT; "
+                "mkdir -p /etc/buddy && ( busybox flock -x 9 || exit 1; "
+                + "if [ ! -f /etc/buddy/base-upgraded-v1 ]; then "
                 + "apk update -q && apk upgrade -q && apk add -q 'musl>=1.2.6-r3' 'zlib>=1.3.2-r1' "
-                + "&& apk info -vv > /etc/buddy/base-upgraded-v1 || exit 1; "
-                + "rmdir /tmp/buddy-base-upgrade.lock; trap - EXIT; fi; exec \"$@\"", "buddy-init"));
+                + "&& apk info -vv > /etc/buddy/base-upgraded-v1.tmp "
+                + "&& mv /etc/buddy/base-upgraded-v1.tmp /etc/buddy/base-upgraded-v1 || exit 1; "
+                + "fi ) 9>/etc/buddy/base-upgrade.lock || exit 1; exec \"$@\"", "buddy-init"));
         a.addAll(Arrays.asList(cmd));
         return a;
     }
