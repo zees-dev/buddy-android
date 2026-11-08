@@ -113,6 +113,7 @@ final class PhoneTools {
         if (ruleRun && NOT_IN_RULES.contains(name)) {
             return text("Not available in a notification rule's run. Say in your reply what you wanted to do.");
         }
+        McpServer.requireActive();
         switch (name) {
             case "clipboard_read": return text(clipboardRead());
             case "clipboard_write": return text(clipboardWrite(a.getString("text")));
@@ -150,7 +151,7 @@ final class PhoneTools {
     private String clipboardWrite(String text) throws Exception {
         AtomicReference<String> err = new AtomicReference<>();
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
-        svc.runOnMain(() -> {
+        svc.runOnMain(McpServer.effect(() -> {
             try {
                 ClipboardManager cm = (ClipboardManager) svc.getSystemService(Context.CLIPBOARD_SERVICE);
                 cm.setPrimaryClip(ClipData.newPlainText("Buddy", text));
@@ -158,7 +159,7 @@ final class PhoneTools {
                 err.set(String.valueOf(e.getMessage()));
             }
             done.countDown();
-        });
+        }));
         done.await(5, TimeUnit.SECONDS);
         return err.get() == null ? "Copied: the user can paste it now." : "Couldn't copy: " + err.get();
     }
@@ -204,7 +205,7 @@ final class PhoneTools {
     private boolean start(Intent i) {
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         if (i.resolveActivity(svc.getPackageManager()) == null) return false;
-        svc.runOnMain(() -> svc.startActivity(i));
+        svc.runOnMain(McpServer.effect(() -> svc.startActivity(i)));
         return true;
     }
 
@@ -243,7 +244,7 @@ final class PhoneTools {
         if (!text.isEmpty()) send.putExtra(Intent.EXTRA_TEXT, text);
         Intent chooser = Intent.createChooser(send, a.optString("title", null));
         chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        svc.runOnMain(() -> svc.startActivity(chooser));
+        svc.runOnMain(McpServer.effect(() -> svc.startActivity(chooser)));
         return "The share sheet is open: the user picks the app. Nothing has been sent; if they asked you to send it "
                 + "somewhere, the approval rules still apply in that app.";
     }
@@ -256,6 +257,7 @@ final class PhoneTools {
         v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
         v.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/Buddy");
         v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+        McpServer.requireActive();
         Uri u = svc.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
         if (u == null) return "Couldn't save to Downloads.";
         try (OutputStream o = svc.getContentResolver().openOutputStream(u)) {
@@ -263,6 +265,7 @@ final class PhoneTools {
         }
         v.clear();
         v.put(MediaStore.MediaColumns.IS_PENDING, 0);
+        McpServer.requireActive();
         svc.getContentResolver().update(u, v, null, null);
         return "Saved to Downloads/Buddy/" + name + ".";
     }
@@ -395,6 +398,7 @@ final class PhoneTools {
         if ("volume".equals(action)) {
             if (volume < 0 || volume > 100) return "Give volume as 0 to 100.";
             int max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            McpServer.requireActive();
             am.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(volume / 100f * max), 0);
             return "Media volume set to " + volume + "%.";
         }
@@ -404,6 +408,7 @@ final class PhoneTools {
                     : "next".equals(action) ? android.view.KeyEvent.KEYCODE_MEDIA_NEXT
                     : "previous".equals(action) ? android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
                     : android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE;
+            McpServer.requireActive();
             am.dispatchMediaKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, key));
             am.dispatchMediaKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, key));
             Thread.sleep(700);
@@ -540,6 +545,7 @@ final class PhoneTools {
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         android.os.CancellationSignal cancel = new android.os.CancellationSignal();
         try {
+            McpServer.requireActive();
             lm.getCurrentLocation(provider, cancel, svc.getMainExecutor(), l -> {
                 got.set(l);
                 done.countDown();

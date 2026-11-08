@@ -54,7 +54,8 @@ final class Helper {
         final String[] cmd = new String[args.length + 3];
         cmd[0] = "/bin/bash";
         cmd[1] = "/root/bin/buddy-run";
-        cmd[2] = Prefs.token(app);
+        boolean chatRun = args.length > 1 && "ask".equals(args[0]);
+        cmd[2] = chatRun ? McpServer.chatToken(args[1]) : Prefs.token(app);
         System.arraycopy(args, 0, cmd, 3, args.length);
         pool.execute(() -> {
             try {
@@ -72,6 +73,8 @@ final class Helper {
                 p.waitFor();
             } catch (Exception e) {
                 android.util.Log.w("Buddy", "helper failed", e);
+            } finally {
+                if (chatRun) McpServer.endChatToken(cmd[2]);
             }
         });
     }

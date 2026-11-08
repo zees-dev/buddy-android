@@ -60,6 +60,8 @@ final class McpServer {
     }
 
     private volatile String token;
+    private static final Map<String, String> chatTokens = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<Socket, Thread> executing = new java.util.concurrent.ConcurrentHashMap<>();
     private final Handler handler;
     private final ExecutorService pool = new ThreadPoolExecutor(0, 8, 30, TimeUnit.SECONDS,
             new SynchronousQueue<>());
@@ -91,7 +93,20 @@ final class McpServer {
 
     void rotateToken(String next) {
         token = next;
+        chatTokens.clear();
         for (Socket s : clients) try { s.close(); } catch (IOException ignored) { }
+        for (Thread t : executing.values()) t.interrupt();
+    }
+
+    /** Only Helper can issue a chat credential; the chat query parameter carries no authority. */
+    static String chatToken(String chat) {
+        String credential = java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID();
+        chatTokens.put(credential, chat);
+        return credential;
+    }
+
+    static void endChatToken(String credential) {
+        chatTokens.remove(credential);
     }
 
     private void acceptLoop() {
@@ -149,15 +164,9 @@ final class McpServer {
             String path = parts[1];
             final String rawPath = path; // with its query, for the API relay
             int q = path.indexOf('?');
-            String chat = null;
             if (q >= 0) {
-                // Buddy's own chats connect to /mcp?chat=<id>; other sessions (a terminal, Remote Control) don't
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:^|&)chat=([A-Za-z0-9_-]{1,64})")
-                        .matcher(path.substring(q + 1));
-                if (m.find()) chat = m.group(1);
                 path = path.substring(0, q);
             }
-            CALLER_CHAT.set(chat);
 
             Map<String, String> headers = new HashMap<>();
             String line;
@@ -188,15 +197,22 @@ final class McpServer {
             // Anthropic-style clients (OpenCode's) send the token they were given as x-api-key: the relay takes that too
             String requestToken = token;
             String xKey = path.startsWith(Relay.PATH) ? headers.get("x-api-key") : null;
-            if (!authorized(headers.get("authorization"), requestToken) && !(xKey != null && authorized("Bearer " + xKey, requestToken))) {
+            String auth = headers.get("authorization");
+            String credential = auth != null && auth.startsWith("Bearer ") ? auth.substring(7) : xKey;
+            String chat = credential == null ? null : chatTokens.get(credential);
+            if (!authorized(auth, requestToken) && !(xKey != null && authorized("Bearer " + xKey, requestToken)) && chat == null) {
                 send(out, 401, "application/json", "{\"error\":\"unauthorized\"}");
                 return;
             }
             byte[] body = readBody(request, headers);
             // This identity is server-generated and never taken from the caller's chat query parameter.
             CALLER_SESSION.set(java.util.UUID.randomUUID().toString());
-            CALLER_VALID.set(() -> running && requestToken.equals(token) && !s.isClosed());
+            CALLER_CHAT.set(chat);
+            CALLER_VALID.set(() -> running && requestToken.equals(token) && !s.isClosed()
+                    && (chat == null || chat.equals(chatTokens.get(credential))));
             CALLER_GONE.set(() -> gone(s, in));
+            executing.put(s, Thread.currentThread());
+            requireActive();
 
             if ("/event".equals(path) && "POST".equals(method)) {
                 try {
@@ -248,6 +264,7 @@ final class McpServer {
             CALLER_SESSION.remove();
             CALLER_VALID.remove();
             clients.remove(s);
+            executing.remove(s);
             try {
                 s.close();
             } catch (IOException ignored) {
@@ -263,7 +280,25 @@ final class McpServer {
 
     static boolean callerActive() {
         java.util.function.BooleanSupplier valid = CALLER_VALID.get();
-        return valid != null && valid.getAsBoolean();
+        java.util.function.BooleanSupplier gone = CALLER_GONE.get();
+        return !Thread.currentThread().isInterrupted() && valid != null && valid.getAsBoolean()
+                && (gone == null || !gone.getAsBoolean());
+    }
+
+    static void requireActive() {
+        if (!callerActive()) throw new java.util.concurrent.CancellationException("request session ended");
+    }
+
+    /** Capture request authority before crossing to Android's main thread. */
+    static Runnable effect(Runnable action) {
+        requireActive();
+        java.util.function.BooleanSupplier valid = CALLER_VALID.get();
+        return () -> { if (valid.getAsBoolean()) action.run(); };
+    }
+
+    static java.util.function.BooleanSupplier executionValid() {
+        requireActive();
+        return CALLER_VALID.get();
     }
     /** True once the client of the current request (on this thread) has hung up, e.g. its tool call timed out. */
     static final ThreadLocal<java.util.function.BooleanSupplier> CALLER_GONE = new ThreadLocal<>();

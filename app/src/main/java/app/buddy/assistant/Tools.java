@@ -356,6 +356,7 @@ final class Tools {
     }
 
     private JSONObject call0(String name, JSONObject a) throws Exception {
+        McpServer.requireActive();
         String revoked = svc.controlRevoked();
         if (revoked != null && !"notify".equals(name)) return text(revoked);
         String capped = countStep(name, a);
@@ -385,6 +386,7 @@ final class Tools {
             if (held != null) return text(held);
         }
         if (ACTIONS.contains(name) && Guard.humanOnly(svc)) return text(HUMAN_ONLY);
+        McpServer.requireActive();
         svc.onToolActivity(name);
         String step = activity(name, a);
         if (step != null) svc.showActivity(step, null);
@@ -740,6 +742,7 @@ final class Tools {
         }
         if (Triggers.userAnswered(chat)) return answeredItself(n); // they may have, while the card waited
         if (Triggers.wroteAgain(chat)) return wroteAgain(chat, n);
+        McpServer.requireActive();
         if (!Triggers.sendReply(svc, n.reply, text)) {
             return "Not sent: " + n.app + " no longer takes replies from this notification (it was probably answered or "
                     + "dismissed). Open the app to check before trying again.";
@@ -1096,6 +1099,7 @@ final class Tools {
         StringBuilder out = new StringBuilder();
         int done = 0;
         for (int i = 0; i < steps.length() && i < 12; i++) {
+            McpServer.requireActive();
             JSONObject st = steps.getJSONObject(i);
             String action = st.optString("action");
             String tool = "type".equals(action) ? "type_text" : action;
@@ -1337,6 +1341,7 @@ final class Tools {
     private static final String HUMAN_ONLY = "BLOCKED: installers, permissions, security settings and Buddy controls require the human. Ask the user to do this step.";
 
     private String tap(JSONObject a, boolean longPress) throws Exception {
+        McpServer.requireActive();
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         AccessibilityNodeInfo n = node(a);
         int x, y;
@@ -1578,6 +1583,7 @@ final class Tools {
     }
 
     private String typeText(JSONObject a) throws Exception {
+        McpServer.requireActive();
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         String text = a.getString("text");
         AccessibilityNodeInfo target = node(a);
@@ -1587,6 +1593,7 @@ final class Tools {
         if (!target.refresh()) return CHANGED;
         if (Guard.offLimits(svc, target)) return "BLOCKED: that's Buddy's own screen. Only the user types there.";
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+        McpServer.requireActive();
         if (!target.isFocused()) target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
         if (!target.refresh()) return CHANGED;
         boolean sensitive = Guard.sensitiveInput(target);
@@ -1672,8 +1679,11 @@ final class Tools {
         Bundle sel = new Bundle();
         sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, append ? len : 0);
         sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len);
+        McpServer.requireActive();
         target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel);
+        McpServer.requireActive();
         cm.setPrimaryClip(ClipData.newPlainText("Buddy", text));
+        McpServer.requireActive();
         return target.performAction(AccessibilityNodeInfo.ACTION_PASTE);
     }
 
@@ -1798,6 +1808,7 @@ final class Tools {
     }
 
     private String press(String button) {
+        McpServer.requireActive();
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         int action;
         switch (button) {
@@ -1809,6 +1820,7 @@ final class Tools {
             default: throw new IllegalArgumentException("Unknown button " + button);
         }
         String before = "back".equals(button) ? beforeAction() : null;
+        McpServer.requireActive();
         boolean ok = svc.performGlobalAction(action);
         try {
             Thread.sleep(500);
@@ -1855,6 +1867,7 @@ final class Tools {
         Intent launch = pm.getLaunchIntentForPackage(best);
         if (launch == null) return "App " + bestLabel + " cannot be launched.";
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        McpServer.requireActive();
         svc.startActivity(launch);
         Thread.sleep(1500);
         return "Opened " + bestLabel + " (" + best + "). Call read_screen to see it.";
@@ -1940,11 +1953,13 @@ final class Tools {
             }
         }
         if (!svc.getPackageManager().canRequestPackageInstalls()) {
+            McpServer.requireActive();
             svc.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                     android.net.Uri.parse("package:" + svc.getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             return "Buddy isn't allowed to install apps yet. Android's settings page for that is open now: ask the user to "
                     + "turn on 'Allow from this source' for Buddy, wait until they say it's done, then call install_apk again.";
         }
+        McpServer.requireActive();
         svc.startActivity(new Intent(Intent.ACTION_VIEW)
                 .setDataAndType(FilesProvider.apkUri(), "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION));
@@ -2001,6 +2016,7 @@ final class Tools {
         ResolveInfo to = svc.getPackageManager().resolveActivity(i, 0);
         if (to != null && to.activityInfo != null && Guard.sensitivePackage(svc, to.activityInfo.packageName))
             return HUMAN_ONLY;
+        McpServer.requireActive();
         svc.startActivity(i);
         Thread.sleep(1500);
         return "Opened " + url + ". Call read_screen to see it.";

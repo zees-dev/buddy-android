@@ -28,6 +28,7 @@ public class PhoneToolActivity extends Activity {
     static synchronized Object run(Context c, String job, String arg, int timeoutSeconds) throws InterruptedException {
         CompletableFuture<Object> f = new CompletableFuture<>();
         pending = f;
+        McpServer.requireActive();
         c.startActivity(new Intent(c, PhoneToolActivity.class).putExtra("job", job).putExtra("arg", arg)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION));
         try {

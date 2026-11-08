@@ -591,7 +591,9 @@ public final class Schedules extends BroadcastReceiver {
     static String agentTool(Context c, String chat, String name, JSONObject a) throws Exception {
         if (chat == null) return "Only in Buddy's own chats.";
         if (Triggers.ruleRun(chat)) return "Not available in a notification rule's run.";
+        java.util.function.BooleanSupplier valid = McpServer.executionValid();
         java.util.concurrent.FutureTask<String> t = new java.util.concurrent.FutureTask<>(() -> {
+            if (!valid.getAsBoolean()) return "BLOCKED: request session ended.";
             Sessions.Session s = ChatHub.get(c).sessions.find(chat);
             if (s == null) return "This chat is gone.";
             listen(c);
