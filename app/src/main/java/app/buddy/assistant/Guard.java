@@ -490,6 +490,8 @@ final class Guard {
 
     private static final Pattern SENSITIVE_INPUT = Pattern.compile(
             "(?i)password|passcode|one.?time|otp|verification.?code|credit.?card|card.?number|cc-|cvc|cvv|security.?code|\\bpin\\b");
+    private static final Pattern ORDINARY_INPUT = Pattern.compile(
+            "(?i)^(message|search|title|notes?|subject|comment|reply|compose|description|filename|file name|query)([ .…:_-].*)?$");
 
     /** Accessibility does not expose View autofill hints uniformly; also check input types, hints and exposed extras. */
     static boolean sensitiveInput(AccessibilityNodeInfo n) {
@@ -507,9 +509,17 @@ final class Guard {
             Object value = n.getExtras().get(key);
             hints += " " + (value instanceof Object[] ? java.util.Arrays.toString((Object[]) value) : value);
         }
-        // Unclassified/custom editors may hide their purpose. Require a declared ordinary text input.
-        return cls == android.text.InputType.TYPE_NULL || cls == android.text.InputType.TYPE_CLASS_NUMBER
-                || SENSITIVE_INPUT.matcher(hints).find();
+        if (cls != android.text.InputType.TYPE_CLASS_TEXT || SENSITIVE_INPUT.matcher(hints).find()) return true;
+        if (variation == android.text.InputType.TYPE_TEXT_VARIATION_URI || variation == android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
+                || variation == android.text.InputType.TYPE_TEXT_VARIATION_SHORT_MESSAGE
+                || variation == android.text.InputType.TYPE_TEXT_VARIATION_LONG_MESSAGE) return false;
+        String id = n.getViewIdResourceName();
+        if (id != null) id = id.substring(id.lastIndexOf('/') + 1);
+        // Missing or unfamiliar metadata (including untranslated credential hints) cannot establish an ordinary editor.
+        for (CharSequence purpose : new CharSequence[]{n.getHintText(), n.getContentDescription(), id})
+            if (purpose != null && ORDINARY_INPUT.matcher(purpose.toString().trim()).matches()) return false;
+        return true;
     }
 
     /** Input goes to the focused application editor even when the gesture targets an IME or paste toolbar. */
