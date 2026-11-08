@@ -307,7 +307,8 @@ final class Account {
                     if (out.contains("NOTINSTALLED")) {
                         set(Step.NEED_INSTALL, "");
                     } else {
-                        boolean logged = low.contains("logged in") && !low.contains("not logged in");
+                        boolean logged = low.contains("logged in") && !low.contains("not logged in")
+                                || low.contains("api key configured");
                         planIn = logged && !low.contains("api key");
                         apiKey = !Providers.forAgent(agent).isEmpty();
                         if (logged || apiKey) {
@@ -422,7 +423,7 @@ final class Account {
         return opencode() && !opencode2 && !version.isEmpty();
     }
 
-    /** Updates the agent to its latest version; {@link #updateNote} says what happened. */
+    /** Updates the agent (Codex stays pinned); {@link #updateNote} says what happened. */
     void update(Context c) {
         app = c.getApplicationContext();
         if (busy()) return;
@@ -454,8 +455,8 @@ final class Account {
                             + " npm install -g @opencode/cli@$v >>/tmp/npm.log 2>&1; fi;"
                             + OC_GLIBC + " tail -3 /tmp/npm.log; echo VER=$(opencode --version)", 1800);
                 } else {
-                    o = Linux.exec(app, "npm install -g @openai/codex@latest >/tmp/npm.log 2>&1; tail -3 /tmp/npm.log;"
-                            + " echo VER=$(codex --version)", 1800);
+                    Helper.sync(app);
+                    o = Linux.exec(app, "sh /root/bin/install-codex.sh && echo VER=$(codex --version)", 1800);
                 }
                 String after = ver(o);
                 if (after.isEmpty()) throw new IOException(tail(o));
