@@ -111,19 +111,64 @@ final class McpServer {
 
     private void acceptLoop() {
         while (running) {
-            try {
-                ServerSocket ss = new ServerSocket();
+            try (java.nio.channels.Selector selector = java.nio.channels.Selector.open();
+                 java.nio.channels.ServerSocketChannel listener = java.nio.channels.ServerSocketChannel.open()) {
+                ServerSocket ss = listener.socket();
                 ss.setReuseAddress(true);
                 ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), PORT));
                 socket = ss;
+                listener.configureBlocking(false);
+                listener.register(selector, java.nio.channels.SelectionKey.OP_ACCEPT);
                 while (running) {
-                    final Socket s = ss.accept();
-                    clients.add(s);
-                    try {
-                        pool.execute(() -> handle(s));
-                    } catch (RejectedExecutionException e) {
-                        clients.remove(s);
-                        s.close();
+                    selector.select(100);
+                    java.util.Iterator<java.nio.channels.SelectionKey> ready = selector.selectedKeys().iterator();
+                    while (ready.hasNext()) {
+                        java.nio.channels.SelectionKey key = ready.next();
+                        ready.remove();
+                        if (key.isAcceptable()) {
+                            java.nio.channels.SocketChannel channel = listener.accept();
+                            if (channel == null) continue;
+                            // Incomplete headers occupy bounded buffers, never execution workers.
+                            if (selector.keys().size() > 128) { channel.close(); continue; }
+                            channel.configureBlocking(false);
+                            clients.add(channel.socket());
+                            channel.register(selector, java.nio.channels.SelectionKey.OP_READ, new Admission());
+                        } else if (key.isReadable()) {
+                            java.nio.channels.SocketChannel channel = (java.nio.channels.SocketChannel) key.channel();
+                            Admission admission = (Admission) key.attachment();
+                            try {
+                                int n = channel.read(admission.bytes);
+                                if (n < 0) throw new IOException("incomplete headers");
+                                int end = admission.headerEnd();
+                                if (end < 0) {
+                                    if (!admission.bytes.hasRemaining()) throw new IOException("headers too large");
+                                    continue;
+                                }
+                                byte[] prefix = java.util.Arrays.copyOf(admission.bytes.array(), admission.bytes.position());
+                                if (!admitted(prefix, end)) {
+                                    channel.write(java.nio.ByteBuffer.wrap(("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                            .getBytes(StandardCharsets.US_ASCII)));
+                                    throw new IOException("unauthorized");
+                                }
+                                key.cancel();
+                                channel.configureBlocking(true);
+                                Socket s = channel.socket();
+                                clients.add(s);
+                                try { pool.execute(() -> handle(s, prefix)); }
+                                catch (RejectedExecutionException e) { clients.remove(s); s.close(); }
+                            } catch (IOException e) {
+                                key.cancel();
+                                clients.remove(channel.socket());
+                                channel.close();
+                            }
+                        }
+                    }
+                    for (java.nio.channels.SelectionKey key : selector.keys()) {
+                        if (key.attachment() instanceof Admission && System.nanoTime() >= ((Admission) key.attachment()).deadline) {
+                            key.cancel();
+                            clients.remove(((java.nio.channels.SocketChannel) key.channel()).socket());
+                            key.channel().close();
+                        }
                     }
                 }
             } catch (IOException e) {
@@ -138,10 +183,39 @@ final class McpServer {
         }
     }
 
-    private void handle(Socket s) {
+    private static final class Admission {
+        final java.nio.ByteBuffer bytes = java.nio.ByteBuffer.allocate(MAX_HEADERS);
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        int scanned = 3;
+
+        int headerEnd() {
+            byte[] b = bytes.array();
+            for (; scanned < bytes.position(); scanned++) {
+                if (b[scanned - 3] == '\r' && b[scanned - 2] == '\n' && b[scanned - 1] == '\r' && b[scanned] == '\n')
+                    return scanned + 1;
+            }
+            return -1;
+        }
+    }
+
+    private boolean admitted(byte[] prefix, int end) {
+        String[] lines = new String(prefix, 0, end, StandardCharsets.UTF_8).split("\r\n");
+        String auth = null, xKey = null;
+        for (String line : lines) {
+            if (line.regionMatches(true, 0, "Authorization:", 0, 14)) auth = line.substring(14).trim();
+            if (line.regionMatches(true, 0, "x-api-key:", 0, 10)) xKey = line.substring(10).trim();
+        }
+        if (lines[0].startsWith("POST /ssh-key "))
+            return auth != null && auth.startsWith("Bearer ") && SshServer.acceptsCode(auth.substring(7));
+        return authorized(auth, token) || auth != null && auth.startsWith("Bearer ") && chatTokens.containsKey(auth.substring(7))
+                || lines[0].contains(" " + Relay.PATH) && xKey != null && authorized("Bearer " + xKey, token);
+    }
+
+    private void handle(Socket s, byte[] prefix) {
         try {
             s.setSoTimeout(30000);
-            InputStream in = new BufferedInputStream(s.getInputStream());
+            InputStream in = new BufferedInputStream(new java.io.SequenceInputStream(
+                    new java.io.ByteArrayInputStream(prefix), s.getInputStream()));
             InputStream request = new java.io.FilterInputStream(in) {
                 final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
                 private void remaining() throws IOException {
