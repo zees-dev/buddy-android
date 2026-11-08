@@ -358,6 +358,19 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         main.post(r);
     }
 
+    /** Keep the authenticated request alive until its Android effect has actually run. */
+    void runEffect(Runnable effect) throws Exception {
+        java.util.function.BooleanSupplier valid = McpServer.executionValid();
+        java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
+            if (!valid.getAsBoolean()) throw new java.util.concurrent.CancellationException("request session ended");
+            effect.run();
+            return null;
+        });
+        main.post(task);
+        try { task.get(); }
+        finally { task.cancel(false); }
+    }
+
     private volatile String settingsActivity;
 
     String settingsActivity() { return settingsActivity; }

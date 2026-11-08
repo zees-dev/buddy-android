@@ -369,15 +369,10 @@ final class McpServer {
     }
 
     /** Capture request authority before crossing to Android's main thread. */
-    static Runnable effect(Runnable action) {
-        requireActive();
-        java.util.function.BooleanSupplier valid = CALLER_VALID.get();
-        return () -> { if (valid.getAsBoolean()) action.run(); };
-    }
-
     static java.util.function.BooleanSupplier executionValid() {
         requireActive();
-        return CALLER_VALID.get();
+        java.util.function.BooleanSupplier valid = CALLER_VALID.get(), gone = CALLER_GONE.get();
+        return () -> valid.getAsBoolean() && (gone == null || !gone.getAsBoolean());
     }
     /** True once the client of the current request (on this thread) has hung up, e.g. its tool call timed out. */
     static final ThreadLocal<java.util.function.BooleanSupplier> CALLER_GONE = new ThreadLocal<>();

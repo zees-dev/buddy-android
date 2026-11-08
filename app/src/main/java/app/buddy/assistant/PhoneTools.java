@@ -151,8 +151,7 @@ final class PhoneTools {
     private String clipboardWrite(String text) throws Exception {
         if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc)) return Guard.HUMAN_ENTRY;
         AtomicReference<String> err = new AtomicReference<>();
-        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
-        svc.runOnMain(McpServer.effect(() -> {
+        svc.runEffect(() -> {
             try {
                 ClipboardManager cm = (ClipboardManager) svc.getSystemService(Context.CLIPBOARD_SERVICE);
                 if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc)) {
@@ -161,9 +160,7 @@ final class PhoneTools {
             } catch (Exception e) {
                 err.set(String.valueOf(e.getMessage()));
             }
-            done.countDown();
-        }));
-        done.await(5, TimeUnit.SECONDS);
+        });
         return err.get() == null ? "Copied: the user can paste it now." : "Couldn't copy: " + err.get();
     }
 
@@ -205,10 +202,10 @@ final class PhoneTools {
         return "Timer started: " + (s >= 60 ? s / 60 + " min " : "") + (s % 60 > 0 || s < 60 ? s % 60 + " s" : "").trim() + ".";
     }
 
-    private boolean start(Intent i) {
+    private boolean start(Intent i) throws Exception {
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         if (i.resolveActivity(svc.getPackageManager()) == null) return false;
-        svc.runOnMain(McpServer.effect(() -> svc.startActivity(i)));
+        svc.runEffect(() -> svc.startActivity(i));
         return true;
     }
 
@@ -247,7 +244,7 @@ final class PhoneTools {
         if (!text.isEmpty()) send.putExtra(Intent.EXTRA_TEXT, text);
         Intent chooser = Intent.createChooser(send, a.optString("title", null));
         chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        svc.runOnMain(McpServer.effect(() -> svc.startActivity(chooser)));
+        svc.runEffect(() -> svc.startActivity(chooser));
         return "The share sheet is open: the user picks the app. Nothing has been sent; if they asked you to send it "
                 + "somewhere, the approval rules still apply in that app.";
     }
