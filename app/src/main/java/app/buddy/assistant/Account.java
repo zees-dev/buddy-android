@@ -376,8 +376,7 @@ final class Account {
                     if (!o.contains("AGENT_OK")) throw new IOException(tail(o));
                 } else {
                     set(Step.INSTALLING, app.getString(R.string.account_downloading, name()));
-                    String o = Linux.exec(app, "npm install -g @openai/codex >/tmp/npm.log 2>&1; tail -5 /tmp/npm.log;"
-                            + " codex --version && echo AGENT_OK", 1800);
+                    String o = Linux.exec(app, "sh /root/bin/install-codex.sh && echo AGENT_OK", 1800);
                     if (!o.contains("AGENT_OK")) throw new IOException(tail(o));
                 }
                 set(Step.SIGNED_OUT, "");

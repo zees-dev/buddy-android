@@ -19,6 +19,7 @@ final class Helper {
     private static final String[][] FILES = {
             // asset, path inside Linux, mode
             {"linux/buddy-run", "/root/bin/buddy-run", "700"},
+            {"linux/install-codex.sh", "/root/bin/install-codex.sh", "700"},
             {"linux/codex-remote", "/root/bin/codex-remote", "700"}, // the Codex session (CodexRemote)
             {"linux/buddy-browser", "/root/bin/buddy-browser", "700"}, // the background browser (Browser)
             {"linux/profile.sh", "/etc/profile.d/buddy.sh", "644"},
