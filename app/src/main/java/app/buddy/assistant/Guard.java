@@ -460,7 +460,10 @@ final class Guard {
     }
 
     static boolean offLimits(android.content.Context c, AccessibilityNodeInfo n) {
-        return n != null && sensitivePackage(c, n.getPackageName());
+        if (n == null) return false;
+        AccessibilityWindowInfo window = n.getWindow();
+        AccessibilityNodeInfo root = window == null ? null : window.getRoot();
+        return root == null || sensitivePackage(c, root.getPackageName());
     }
 
     private static final Pattern SENSITIVE_INPUT = Pattern.compile(
