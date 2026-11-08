@@ -131,7 +131,20 @@ final class McpServer {
                                 java.nio.channels.SocketChannel channel = listener.accept();
                                 if (channel == null) continue;
                                 // Incomplete headers occupy bounded buffers, never execution workers.
-                                if (selector.keys().size() > 128) { channel.close(); continue; }
+                                java.nio.channels.SelectionKey oldest = null;
+                                int pending = 0;
+                                for (java.nio.channels.SelectionKey candidate : selector.keys()) {
+                                    if (!candidate.isValid() || !(candidate.attachment() instanceof Admission)) continue;
+                                    pending++;
+                                    if (oldest == null || ((Admission) candidate.attachment()).deadline
+                                            < ((Admission) oldest.attachment()).deadline) oldest = candidate;
+                                }
+                                // Every peer is loopback. Evict pre-auth work only; authenticated workers have their own cap.
+                                if (pending >= 32 && oldest != null) {
+                                    oldest.cancel();
+                                    clients.remove(((java.nio.channels.SocketChannel) oldest.channel()).socket());
+                                    oldest.channel().close();
+                                }
                                 channel.configureBlocking(false);
                                 clients.add(channel.socket());
                                 channel.register(selector, java.nio.channels.SelectionKey.OP_READ, new Admission());
