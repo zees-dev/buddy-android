@@ -1467,4 +1467,6 @@
     <string name="chat_rename_title">Chat umbenennen</string>
     <string name="chat_rename_hint">Leer: seine erste Nachricht</string>
     <string name="chat_rename_save">Speichern</string>
+    <string name="setup_rotate_token">MCP-Token erneuern</string>
+    <string name="setup_rotate_token_info">Aktuelle Clients trennen und das MCP-Token ersetzen? Verbinde deinen Laptop danach erneut und starte die integrierten Agentensitzungen neu.</string>
 </resources>

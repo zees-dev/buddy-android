@@ -1451,4 +1451,6 @@
     <string name="chat_rename_title">채팅 이름 바꾸기</string>
     <string name="chat_rename_hint">비워 두면: 첫 메시지</string>
     <string name="chat_rename_save">저장</string>
+    <string name="setup_rotate_token">MCP 토큰 갱신</string>
+    <string name="setup_rotate_token_info">현재 클라이언트 연결을 끊고 MCP 토큰을 교체할까요? 이후 노트북을 다시 연결하고 내장 에이전트 세션을 다시 시작하세요.</string>
 </resources>

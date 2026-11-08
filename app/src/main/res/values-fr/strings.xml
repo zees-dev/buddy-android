@@ -1900,4 +1900,6 @@
     <string name="chat_rename_title">Renommer la discussion</string>
     <string name="chat_rename_hint">Vide : son premier message</string>
     <string name="chat_rename_save">Enregistrer</string>
+    <string name="setup_rotate_token">Renouveler le jeton MCP</string>
+    <string name="setup_rotate_token_info">Déconnecter les clients actuels et remplacer le jeton MCP ? Reconnectez ensuite votre ordinateur et redémarrez les sessions des agents intégrés.</string>
 </resources>

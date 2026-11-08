@@ -2041,4 +2041,6 @@
     <string name="chat_rename_title">Đổi tên cuộc trò chuyện</string>
     <string name="chat_rename_hint">Để trống: tin nhắn đầu tiên</string>
     <string name="chat_rename_save">Lưu</string>
+    <string name="setup_rotate_token">Đổi mã MCP</string>
+    <string name="setup_rotate_token_info">Ngắt các máy khách hiện tại và thay mã MCP? Sau đó, kết nối lại máy tính xách tay và khởi động lại các phiên tác nhân tích hợp.</string>
 </resources>

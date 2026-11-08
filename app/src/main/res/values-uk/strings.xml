@@ -1939,4 +1939,6 @@
     <string name="chat_rename_title">Перейменувати чат</string>
     <string name="chat_rename_hint">Порожньо: перше повідомлення</string>
     <string name="chat_rename_save">Зберегти</string>
+    <string name="setup_rotate_token">Оновити токен MCP</string>
+    <string name="setup_rotate_token_info">Відключити поточних клієнтів і замінити токен MCP? Потім знову підключіть ноутбук і перезапустіть сеанси вбудованих агентів.</string>
 </resources>

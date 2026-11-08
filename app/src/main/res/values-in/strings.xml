@@ -1901,4 +1901,6 @@
     <string name="chat_rename_title">Ganti nama chat</string>
     <string name="chat_rename_hint">Kosong: pesan pertamanya</string>
     <string name="chat_rename_save">Simpan</string>
+    <string name="setup_rotate_token">Perbarui token MCP</string>
+    <string name="setup_rotate_token_info">Putuskan klien saat ini dan ganti token MCP? Setelah itu, sambungkan kembali laptop dan mulai ulang sesi agen bawaan.</string>
 </resources>

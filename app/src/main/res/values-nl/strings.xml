@@ -1466,4 +1466,6 @@
     <string name="chat_rename_title">Chat hernoemen</string>
     <string name="chat_rename_hint">Leeg: het eerste bericht</string>
     <string name="chat_rename_save">Opslaan</string>
+    <string name="setup_rotate_token">MCP-token vernieuwen</string>
+    <string name="setup_rotate_token_info">Huidige clients loskoppelen en het MCP-token vervangen? Verbind daarna je laptop opnieuw en herstart de ingebouwde agentsessies.</string>
 </resources>

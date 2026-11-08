@@ -2024,7 +2024,6 @@
     <string name="backup_restored_no_linux">Restored your chats and appearance settings. Linux files from older backups are excluded because they may contain credentials. Buddy restarts now.</string>
     <string name="setup_rotate_token">Rotate MCP token</string>
     <string name="setup_rotate_token_info">Disconnect current clients and replace the MCP token? Reconnect your laptop and restart bundled agent sessions afterward.</string>
-    <string name="tools_card_sensitive_entry">Sensitive field: approve this exact text entry?\n%1$s</string>
     <string name="backup_failed">Didn\'t work: %1$s</string>
     <string name="backup_not_one">That file isn\'t a Buddy backup.</string>
     <string name="chat_incognito">Incognito</string>

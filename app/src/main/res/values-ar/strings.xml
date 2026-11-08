@@ -1512,4 +1512,6 @@
     <string name="chat_rename_title">إعادة تسمية المحادثة</string>
     <string name="chat_rename_hint">فارغ: أول رسالة فيها</string>
     <string name="chat_rename_save">حفظ</string>
+    <string name="setup_rotate_token">تجديد رمز MCP</string>
+    <string name="setup_rotate_token_info">هل تريد قطع اتصال العملاء الحاليين واستبدال رمز MCP؟ أعد توصيل حاسوبك المحمول وأعد تشغيل جلسات الوكلاء المدمجة بعد ذلك.</string>
 </resources>

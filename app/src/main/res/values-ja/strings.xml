@@ -1452,4 +1452,6 @@
     <string name="chat_rename_title">チャットの名前を変更</string>
     <string name="chat_rename_hint">空欄: 最初のメッセージ</string>
     <string name="chat_rename_save">保存</string>
+    <string name="setup_rotate_token">MCPトークンを更新</string>
+    <string name="setup_rotate_token_info">現在のクライアントを切断してMCPトークンを置き換えますか？その後、ノートパソコンを再接続し、内蔵エージェントのセッションを再起動してください。</string>
 </resources>

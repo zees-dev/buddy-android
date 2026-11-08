@@ -1899,4 +1899,6 @@
     <string name="chat_rename_title">Cambiar nombre del chat</string>
     <string name="chat_rename_hint">Vacío: su primer mensaje</string>
     <string name="chat_rename_save">Guardar</string>
+    <string name="setup_rotate_token">Renovar el token MCP</string>
+    <string name="setup_rotate_token_info">¿Desconectar los clientes actuales y reemplazar el token MCP? Después, vuelve a conectar tu portátil y reinicia las sesiones de los agentes integrados.</string>
 </resources>

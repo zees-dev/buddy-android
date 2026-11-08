@@ -1900,4 +1900,6 @@
     <string name="chat_rename_title">重命名聊天</string>
     <string name="chat_rename_hint">留空：使用第一条消息</string>
     <string name="chat_rename_save">保存</string>
+    <string name="setup_rotate_token">更新 MCP 令牌</string>
+    <string name="setup_rotate_token_info">断开当前客户端并替换 MCP 令牌？之后请重新连接笔记本电脑，并重启内置代理会话。</string>
 </resources>

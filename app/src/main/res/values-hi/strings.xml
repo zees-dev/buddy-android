@@ -1460,4 +1460,6 @@
     <string name="chat_rename_title">चैट का नाम बदलें</string>
     <string name="chat_rename_hint">खाली: इसका पहला संदेश</string>
     <string name="chat_rename_save">सहेजें</string>
+    <string name="setup_rotate_token">MCP टोकन बदलें</string>
+    <string name="setup_rotate_token_info">मौजूदा क्लाइंट डिस्कनेक्ट करके MCP टोकन बदलें? इसके बाद अपना लैपटॉप फिर से कनेक्ट करें और अंतर्निहित एजेंट सत्र दोबारा शुरू करें।</string>
 </resources>

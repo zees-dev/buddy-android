@@ -1468,4 +1468,6 @@
     <string name="chat_rename_title">Sohbeti yeniden adlandır</string>
     <string name="chat_rename_hint">Boş: ilk mesajı</string>
     <string name="chat_rename_save">Kaydet</string>
+    <string name="setup_rotate_token">MCP belirtecini yenile</string>
+    <string name="setup_rotate_token_info">Mevcut istemciler kesilip MCP belirteci değiştirilsin mi? Ardından dizüstü bilgisayarını yeniden bağla ve yerleşik aracı oturumlarını yeniden başlat.</string>
 </resources>

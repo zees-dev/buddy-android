@@ -1494,4 +1494,6 @@
     <string name="chat_rename_title">Zmień nazwę czatu</string>
     <string name="chat_rename_hint">Puste: pierwsza wiadomość</string>
     <string name="chat_rename_save">Zapisz</string>
+    <string name="setup_rotate_token">Odnów token MCP</string>
+    <string name="setup_rotate_token_info">Rozłączyć bieżących klientów i zastąpić token MCP? Następnie połącz laptop ponownie i uruchom ponownie sesje wbudowanych agentów.</string>
 </resources>
