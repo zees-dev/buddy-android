@@ -90,7 +90,8 @@ public final class Updates extends BroadcastReceiver {
 
     /** {@link #install(Context, Release)}; with user, what went wrong is in the user's language (for the sheet). */
     private static String install(Context c, Release r, boolean user) {
-        if (r.apkUrl == null) return user ? c.getString(R.string.update_error_no_apk) : "The release has no buddy.apk yet.";
+        if (r.apkUrl == null || !r.apkUrl.startsWith(REPO + "/releases/download/"))
+            return user ? c.getString(R.string.update_error_no_apk) : "The fork release has no buddy.apk.";
         File out = FilesProvider.apkFile(c);
         try {
             HttpURLConnection h = (HttpURLConnection) new URL(r.apkUrl).openConnection();
@@ -105,11 +106,23 @@ public final class Updates extends BroadcastReceiver {
             return user ? c.getString(R.string.update_error_download, e.getMessage())
                     : "The download failed (" + e.getMessage() + ").";
         }
-        android.content.pm.PackageInfo pi = c.getPackageManager().getPackageArchiveInfo(out.getPath(), 0);
+        android.content.pm.PackageManager pm = c.getPackageManager();
+        android.content.pm.PackageInfo pi = pm.getPackageArchiveInfo(out.getPath(), android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
         if (pi == null || !c.getPackageName().equals(pi.packageName) || pi.getLongVersionCode() <= BuildInfo.VERSION_CODE) {
             return user ? c.getString(R.string.update_error_not_newer)
                     : "The downloaded file isn't a newer Buddy, so it wasn't opened.";
         }
+        try {
+            android.content.pm.PackageInfo installed = pm.getPackageInfo(c.getPackageName(), android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
+            if (pi.signingInfo == null || installed.signingInfo == null || !java.util.Arrays.equals(
+                    pi.signingInfo.getApkContentsSigners(), installed.signingInfo.getApkContentsSigners())) {
+                out.delete();
+                return "The update signing identity does not match this fork. It was not opened.";
+            }
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            return "Could not verify this fork's signing identity. It was not opened.";
+        }
+        if (McpServer.CALLER_SESSION.get() != null) McpServer.requireActive();
         if (!c.getPackageManager().canRequestPackageInstalls()) {
             c.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                     Uri.parse("package:" + c.getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
