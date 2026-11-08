@@ -386,7 +386,7 @@ final class Tools {
             if (held != null) return text(held);
         }
         if (ACTIONS.contains(name) && Guard.humanOnly(svc)
-                && !("open_app".equals(name) || "press".equals(name) && ("back".equals(a.optString("button")) || "home".equals(a.optString("button"))))) return text(HUMAN_ONLY);
+                && !(scrolling(name) || "do_steps".equals(name) || "open_app".equals(name) || "press".equals(name) && ("back".equals(a.optString("button")) || "home".equals(a.optString("button"))))) return text(HUMAN_ONLY);
         McpServer.requireActive();
         svc.onToolActivity(name);
         String step = activity(name, a);
@@ -1734,9 +1734,42 @@ final class Tools {
         for (int i = 0; i < n.getChildCount(); i++) collectEditable(n.getChild(i), out);
     }
 
+    private boolean scrolling(String name) {
+        return "scroll".equals(name) || "swipe".equals(name) || "collect".equals(name) || "find".equals(name);
+    }
+
+    /** Accessibility scrolling cannot turn a touch-down into a toggle on a protected page. */
+    private String scrollPage(String direction, AccessibilityNodeInfo n) throws InterruptedException {
+        if (n == null || !n.isScrollable()) {
+            for (AccessibilityWindowInfo w : svc.getWindows()) {
+                if (w.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
+                        || w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue;
+                n = scrollable(w.getRoot());
+                if (n != null) break;
+            }
+        }
+        int command = "up".equals(direction) || "left".equals(direction)
+                ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;
+        McpServer.requireActive();
+        boolean moved = n != null && n.performAction(command);
+        Thread.sleep(400);
+        return "Scrolled " + direction + (moved ? "." : ". NOTHING CHANGED: no more scrollable content.");
+    }
+
+    private static AccessibilityNodeInfo scrollable(AccessibilityNodeInfo n) {
+        if (n == null || !n.isVisibleToUser()) return null;
+        if (n.isScrollable()) return n;
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo found = scrollable(n.getChild(i));
+            if (found != null) return found;
+        }
+        return null;
+    }
+
     private String scroll(JSONObject a) throws Exception {
         String dir = a.getString("direction").toLowerCase(Locale.ROOT);
         AccessibilityNodeInfo n = node(a);
+        if (Guard.humanOnly(svc) || Guard.settingsPackage(svc, String.valueOf(svc.foregroundPkg()))) return scrollPage(dir, n);
         Rect r = new Rect();
         if (n != null) {
             n.getBoundsInScreen(r);
@@ -1771,6 +1804,10 @@ final class Tools {
 
     private String swipe(JSONObject a) throws Exception {
         int x1 = a.getInt("x1"), y1 = a.getInt("y1"), x2 = a.getInt("x2"), y2 = a.getInt("y2");
+        if (Guard.humanOnly(svc)
+                && Math.hypot(x2 - x1, y2 - y1) > ViewConfiguration.get(svc).getScaledTouchSlop())
+            return scrollPage(Math.abs(y2 - y1) >= Math.abs(x2 - x1)
+                    ? (y2 < y1 ? "down" : "up") : (x2 < x1 ? "right" : "left"), null);
         // A stroke too short to scroll anything lands as a tap, so it gets every check a tap gets
         int slop = ViewConfiguration.get(svc).getScaledTouchSlop();
         boolean tap = Math.hypot(x2 - x1, y2 - y1) <= slop;

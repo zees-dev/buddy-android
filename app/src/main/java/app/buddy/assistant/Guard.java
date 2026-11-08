@@ -404,24 +404,27 @@ final class Guard {
         return to != null && to.activityInfo != null && pkg.equals(to.activityInfo.packageName);
     }
 
-    private static final String[] SETTINGS_PAGES = {"settings_label", "settings_label_launcher", "about_settings",
-            "firmware_version", "display_settings", "sound_settings", "storage_settings", "battery_settings_title",
-            "power_usage_summary_title", "network_dashboard_title", "network_and_internet_preferences_title", "configure_notification_settings"};
     private static final String[] PROTECTED_SETTINGS = {"accessibility_settings", "accessibility_settings_title",
-            "app_permissions", "applications_settings", "apps_dashboard_title", "special_access", "install_unknown_applications",
+            "app_permissions", "special_access", "install_unknown_applications",
             "development_settings_title", "security_settings_title", "security_dashboard_title", "lockscreen_settings_title",
-            "lock_settings_title", "account_settings_title", "user_settings_title", "system_dashboard_title",
-            "build_number", "search_menu", "search_menu_title", "search_settings", "notification_access_settings_title"};
+            "lock_settings_title", "account_settings_title", "user_settings_title", "biometric_settings_title",
+            "fingerprint_settings_title", "face_settings_title", "passwords_settings_title", "credentials_settings_title",
+            "usage_access", "usage_access_title", "overlay_settings", "device_admin_settings_title", "manage_device_admin",
+            "adb_wireless_settings", "account_dashboard_title_with_passkeys", "install_apps", "manage_notification_access_title",
+            "build_number", "notification_access_settings_title"};
     private static final Pattern PROTECTED_SETTING = Pattern.compile(
             "(?iu)accessibility|permission|special.?access|unknown.?apps|install|developer|development|debug|security|"
-            + "lock.?screen|screen.?lock|password|passcode|account|build.?number|search");
+            + "lock.?screen|screen.?lock|biometric|fingerprint|face.?unlock|password|passcode|passkey|account|build.?number|"
+            + "overlay|display.over.other.apps|notification.?access|usage.?access|device.?admin|credential|\\bpin\\b");
 
-    /** Use the system app's localized resources; unknown/OEM pages stay human-only. */
-    private static boolean settingText(android.content.Context c, String pkg, CharSequence text, String... names) {
+    /** Protected destinations use the system app's localized resources. */
+    private static boolean protectedSetting(BuddyService c, CharSequence packageName, CharSequence text) {
         if (text == null || text.length() == 0) return false;
+        if (PROTECTED_SETTING.matcher(text).find()) return true;
+        String pkg = String.valueOf(packageName);
         try {
             android.content.res.Resources resources = c.getPackageManager().getResourcesForApplication(pkg);
-            for (String name : names) {
+            for (String name : PROTECTED_SETTINGS) {
                 int id = resources.getIdentifier(name, "string", pkg);
                 if (id != 0 && text.toString().equals(resources.getString(id))) return true;
             }
@@ -429,24 +432,13 @@ final class Guard {
         return false;
     }
 
-    private static boolean ordinarySettings(BuddyService svc, AccessibilityWindowInfo window) {
-        String pkg = window.getRoot().getPackageName().toString();
-        if (!settingText(svc, pkg, window.getTitle(), SETTINGS_PAGES)) return false;
-        // Restored activities need not report their class. Check the live page, not a remembered activity.
-        if (settingsHeading(window.getRoot(), window.getTitle(), 0)) return true;
-        if (settingText(svc, pkg, window.getTitle(), "settings_label", "settings_label_launcher")) {
-            for (String id : new String[]{"homepage_container", "settings_homepage_container"})
-                if ((pkg + ":id/" + id).equals(window.getRoot().getViewIdResourceName())
-                        || !window.getRoot().findAccessibilityNodeInfosByViewId(pkg + ":id/" + id).isEmpty()) return true;
-        }
-        return false;
-    }
-
-    private static boolean settingsHeading(AccessibilityNodeInfo n, CharSequence title, int depth) {
-        if (n == null || depth > 15 || !n.isVisibleToUser()) return false;
-        if (n.isHeading() && (title.toString().contentEquals(n.getText() == null ? "" : n.getText())
-                || title.toString().contentEquals(n.getContentDescription() == null ? "" : n.getContentDescription()))) return true;
-        for (int i = 0; i < n.getChildCount(); i++) if (settingsHeading(n.getChild(i), title, depth + 1)) return true;
+    private static boolean protectedSettingsPage(BuddyService svc, AccessibilityNodeInfo n) {
+        if (n == null) return false;
+        if (n.isHeading() && (protectedSetting(svc, n.getPackageName(), n.getText())
+                || protectedSetting(svc, n.getPackageName(), n.getContentDescription()))) return true;
+        if (protectedSetting(svc, n.getPackageName(), n.getPaneTitle())) return true;
+        for (int i = 0; i < n.getChildCount(); i++)
+            if (protectedSettingsPage(svc, n.getChild(i))) return true;
         return false;
     }
 
@@ -460,8 +452,8 @@ final class Guard {
     private static boolean protectedSettingsLink(BuddyService svc, AccessibilityNodeInfo n, int depth) {
         if (n == null || depth > 5) return false;
         String pkg = String.valueOf(n.getPackageName());
-        if (settingText(svc, pkg, n.getText(), PROTECTED_SETTINGS)
-                || settingText(svc, pkg, n.getContentDescription(), PROTECTED_SETTINGS)
+        if (protectedSetting(svc, pkg, n.getText())
+                || protectedSetting(svc, pkg, n.getContentDescription())
                 || PROTECTED_SETTING.matcher(n.getText() + " " + n.getContentDescription() + " " + n.getViewIdResourceName()).find()) return true;
         for (int i = 0; i < n.getChildCount(); i++) if (protectedSettingsLink(svc, n.getChild(i), depth + 1)) return true;
         return false;
@@ -516,19 +508,7 @@ final class Guard {
         return false;
     }
 
-    /** Back and Home dismiss the shade without operating any quick-settings tile. */
-    static boolean shadeDismissal(BuddyService svc, String button) {
-        if (!("back".equals(button) || "home".equals(button)) || Triggers.locked(svc)) return false;
-        for (AccessibilityWindowInfo w : svc.getWindows()) {
-            AccessibilityNodeInfo root = w.getRoot();
-            if (w.getType() == AccessibilityWindowInfo.TYPE_SYSTEM && w.isActive() && root != null
-                    && "com.android.systemui".contentEquals(String.valueOf(root.getPackageName()))
-                    && "NotificationShade".contentEquals(String.valueOf(w.getTitle()))) return true;
-        }
-        return false;
-    }
-
-    /** Block the whole interaction while a protected window is present, including touches through the keyboard. */
+    /** Refuse mutations on protected destinations, including input through the keyboard. */
     static boolean humanOnly(BuddyService svc) {
         if (Triggers.locked(svc) || sensitivePackage(svc, svc.foregroundPkg())) return true;
         for (AccessibilityWindowInfo w : svc.getWindows()) {
@@ -537,7 +517,7 @@ final class Guard {
             if (type != AccessibilityWindowInfo.TYPE_APPLICATION && !w.isActive() && !w.isFocused()) continue;
             AccessibilityNodeInfo root = w.getRoot();
             if (root == null || offLimits(svc, root)) return true;
-            if (root.getPackageName() != null && settingsPackage(svc, root.getPackageName().toString()) && !ordinarySettings(svc, w)) return true;
+            if (root.getPackageName() != null && settingsPackage(svc, root.getPackageName().toString()) && (protectedSetting(svc, root.getPackageName(), w.getTitle()) || protectedSettingsPage(svc, root))) return true;
         }
         return false;
     }
