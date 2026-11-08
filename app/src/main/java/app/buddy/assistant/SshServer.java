@@ -175,14 +175,17 @@ final class SshServer {
     }
 
     /** POST /ssh-key: adds the public key in the body if the code is the current one. The reply is for the terminal. */
+    static synchronized boolean acceptsCode(String given) {
+        return app != null && code != null && given != null && SystemClock.elapsedRealtime() <= codeUntil
+                && MessageDigest.isEqual(code.getBytes(StandardCharsets.UTF_8), given.getBytes(StandardCharsets.UTF_8));
+    }
+
     static String addKey(String given, String body) {
         Matcher m = KEY.matcher(body.trim());
         Context c;
         synchronized (SshServer.class) {
             c = app;
-            if (c == null || code == null || given == null || SystemClock.elapsedRealtime() > codeUntil
-                    || !MessageDigest.isEqual(code.getBytes(StandardCharsets.UTF_8), given.getBytes(StandardCharsets.UTF_8))
-                    || !m.matches()) {
+            if (!acceptsCode(given) || !m.matches()) {
                 return null;
             }
             code = null; // used once

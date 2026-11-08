@@ -20,7 +20,10 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Minimal MCP server (Streamable HTTP, JSON responses only) bound to 127.0.0.1.
@@ -31,6 +34,7 @@ final class McpServer {
     static final int PORT = 8765;
     private static final String TAG = "BuddyMcp";
     private static final String DEFAULT_PROTOCOL = "2025-06-18";
+    private static final int MAX_BODY = 8 * 1024 * 1024, MAX_HEADERS = 16384, MAX_BATCH = 32;
     /** What a client shows its model ahead of the tools: how to work with them, and the rules Buddy enforces anyway. */
     static final String INSTRUCTIONS = "Tools to see and operate this Android phone, through the Buddy app. "
             + "Start with read_screen, and call it again after every action: element ids change with each read. "
@@ -56,7 +60,9 @@ final class McpServer {
 
     private final String token;
     private final Handler handler;
-    private final ExecutorService pool = Executors.newCachedThreadPool();
+    private final ExecutorService pool = new ThreadPoolExecutor(0, 8, 30, TimeUnit.SECONDS,
+            new SynchronousQueue<>());
+    private final java.util.Set<Socket> clients = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private volatile ServerSocket socket;
     private volatile boolean running;
 
@@ -79,6 +85,7 @@ final class McpServer {
         } catch (IOException ignored) {
         }
         pool.shutdownNow();
+        for (Socket s : clients) try { s.close(); } catch (IOException ignored) { }
     }
 
     private void acceptLoop() {
@@ -90,7 +97,13 @@ final class McpServer {
                 socket = ss;
                 while (running) {
                     final Socket s = ss.accept();
-                    pool.execute(() -> handle(s));
+                    clients.add(s);
+                    try {
+                        pool.execute(() -> handle(s));
+                    } catch (RejectedExecutionException e) {
+                        clients.remove(s);
+                        s.close();
+                    }
                 }
             } catch (IOException e) {
                 if (!running) return;
@@ -108,9 +121,21 @@ final class McpServer {
         try {
             s.setSoTimeout(30000);
             InputStream in = new BufferedInputStream(s.getInputStream());
+            InputStream request = new java.io.FilterInputStream(in) {
+                final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                private void remaining() throws IOException {
+                    long ms = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+                    if (ms <= 0) throw new java.net.SocketTimeoutException("request deadline");
+                    s.setSoTimeout((int) Math.min(10000, ms));
+                }
+                @Override public int read() throws IOException { remaining(); return in.read(); }
+                @Override public int read(byte[] b, int off, int len) throws IOException {
+                    remaining(); return in.read(b, off, len);
+                }
+            };
             OutputStream out = s.getOutputStream();
 
-            String requestLine = readLine(in);
+            String requestLine = readLine(request);
             if (requestLine == null || requestLine.isEmpty()) return;
             String[] parts = requestLine.split(" ");
             if (parts.length < 2) return;
@@ -130,20 +155,25 @@ final class McpServer {
 
             Map<String, String> headers = new HashMap<>();
             String line;
-            while ((line = readLine(in)) != null && !line.isEmpty()) {
+            int headerBytes = requestLine.length();
+            while ((line = readLine(request)) != null && !line.isEmpty()) {
+                headerBytes += line.getBytes(StandardCharsets.UTF_8).length + 2;
+                if (headerBytes > MAX_HEADERS) throw new IOException("headers too large");
                 int c = line.indexOf(':');
                 if (c > 0) {
-                    headers.put(line.substring(0, c).trim().toLowerCase(Locale.ROOT), line.substring(c + 1).trim());
+                    if (headers.put(line.substring(0, c).trim().toLowerCase(Locale.ROOT), line.substring(c + 1).trim()) != null)
+                        throw new IOException("duplicate header");
                 }
             }
-            byte[] body = readBody(in, headers);
-            CALLER_GONE.set(() -> gone(s, in));
 
             if ("/ssh-key".equals(path) && "POST".equals(method)) {
                 // Settings' Termux command: a one-time code instead of the token, so a key gets in only when the user copied it
                 String auth = headers.get("authorization");
-                String done = auth != null && auth.startsWith("Bearer ")
-                        ? SshServer.addKey(auth.substring(7), new String(body, StandardCharsets.UTF_8)) : null;
+                if (auth == null || !auth.startsWith("Bearer ") || !SshServer.acceptsCode(auth.substring(7))) {
+                    send(out, 403, null, null);
+                    return;
+                }
+                String done = SshServer.addKey(auth.substring(7), new String(readBody(request, headers), StandardCharsets.UTF_8));
                 send(out, done != null ? 200 : 403, "text/plain",
                         (done != null ? done : BuddyApp.str(R.string.ssh_code_expired)) + "\n");
                 return;
@@ -155,6 +185,8 @@ final class McpServer {
                 send(out, 401, "application/json", "{\"error\":\"unauthorized\"}");
                 return;
             }
+            byte[] body = readBody(request, headers);
+            CALLER_GONE.set(() -> gone(s, in));
 
             if ("/event".equals(path) && "POST".equals(method)) {
                 try {
@@ -167,6 +199,7 @@ final class McpServer {
                 String text = new String(body, StandardCharsets.UTF_8).trim();
                 if (text.startsWith("[")) {
                     JSONArray batch = new JSONArray(text);
+                    if (batch.length() > MAX_BATCH) throw new IOException("batch too large");
                     JSONArray replies = new JSONArray();
                     for (int i = 0; i < batch.length(); i++) {
                         JSONObject r = rpc(batch.getJSONObject(i));
@@ -201,6 +234,8 @@ final class McpServer {
             Log.w(TAG, "request failed", e);
         } finally {
             CALLER_GONE.remove();
+            CALLER_CHAT.remove();
+            clients.remove(s);
             try {
                 s.close();
             } catch (IOException ignored) {
@@ -315,11 +350,11 @@ final class McpServer {
 
     private static String readLine(InputStream in) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        int b;
+        int b, bytes = 0;
         while ((b = in.read()) != -1) {
+            if (++bytes > 4096) throw new IOException("line too long");
             if (b == '\n') break;
             if (b != '\r') buf.write(b);
-            if (buf.size() > 65536) throw new IOException("line too long");
         }
         if (b == -1 && buf.size() == 0) return null;
         return buf.toString("UTF-8");
@@ -328,19 +363,27 @@ final class McpServer {
     private static byte[] readBody(InputStream in, Map<String, String> headers) throws IOException {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         String te = headers.get("transfer-encoding");
-        if (te != null && te.toLowerCase(Locale.ROOT).contains("chunked")) {
+        if (te != null && headers.containsKey("content-length")) throw new IOException("ambiguous body length");
+        if (te != null && !"chunked".equalsIgnoreCase(te)) throw new IOException("unsupported transfer encoding");
+        if (te != null) {
+            int chunks = 0;
             while (true) {
+                if (++chunks > 1024) throw new IOException("too many chunks");
                 String sizeLine = readLine(in);
-                if (sizeLine == null) break;
+                if (sizeLine == null) throw new IOException("missing chunk size");
                 int semi = sizeLine.indexOf(';');
                 int size = Integer.parseInt((semi >= 0 ? sizeLine.substring(0, semi) : sizeLine).trim(), 16);
                 if (size == 0) {
                     String l;
-                    while ((l = readLine(in)) != null && !l.isEmpty()) { /* trailers */ }
+                    int trailers = 0;
+                    while ((l = readLine(in)) != null && !l.isEmpty()) {
+                        trailers += l.length() + 2;
+                        if (trailers > MAX_HEADERS) throw new IOException("trailers too large");
+                    }
                     break;
                 }
                 readFully(in, body, size);
-                readLine(in);
+                if (!"".equals(readLine(in))) throw new IOException("bad chunk ending");
             }
         } else {
             String cl = headers.get("content-length");
@@ -350,7 +393,7 @@ final class McpServer {
     }
 
     private static void readFully(InputStream in, ByteArrayOutputStream out, int n) throws IOException {
-        if (n > 8 * 1024 * 1024) throw new IOException("body too large");
+        if (n < 0 || n > MAX_BODY - out.size()) throw new IOException("body too large");
         byte[] buf = new byte[8192];
         while (n > 0) {
             int r = in.read(buf, 0, Math.min(buf.length, n));
