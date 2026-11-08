@@ -464,10 +464,20 @@ final class Guard {
 
     private static final Pattern SENSITIVE_INPUT = Pattern.compile(
             "(?iu)password|pass.?code|access.?code|one.?time|otp|verification.?code|credit.?card|card.?number|cc-|cvc|cvv|security.?code|(?:^|[^a-z])pin(?:[_-]?(?:entry|code|dots?|display|pad))?(?:$|[^a-z])|"
-            + "密码|密碼|口令|验证码|驗證碼|校验码|校驗碼|动态码|動態碼|認証コード|暗証番号|パスワード|비밀번호|인증.?번호|인증.?코드|"
-            + "mot.de.passe|code.d.accès|code.de.vérification|passwort|kennwort|einmalcode|bestätigungscode|contraseña|código.de.acceso|código.de.verificación|"
-            + "senha|código.de.verificação|codice.di.verifica|wachtwoord|verificatiecode|hasło|kod.weryfikacyjny|пароль|код.подтверждения|"
-            + "парол|код.підтвердження|şifre|doğrulama.kodu|पासवर्ड|ओटीपी|पिन|सत्यापन|kata.sandi|kode.verifikasi|mật.khẩu|mã.xác.minh|كلمة.المرور|رمز.التأكيد|رمز.التحقق");
+            + String.join("|",
+                    "mot.de.passe|code.(?:confidentiel|secret|d.accès|de.(?:vérification|confirmation|sécurité)|à.usage.unique)", // fr
+                    "contraseña|clave.de.acceso|código.secreto|código.de.(?:acceso|verificación|seguridad|un.solo.uso)", // es
+                    "passwort|kennwort|geheimzahl|sicherheitscode|einmal(?:code|passwort)|bestätigungscode|verifizierungscode", // de
+                    "parola.d['’]ordine|codice.(?:segreto|di.(?:accesso|verifica|sicurezza)|monouso)", // it
+                    "senha|palavra.passe|código.secreto|código.de.(?:acesso|verificação|segurança|uso.único)", // pt
+                    "wachtwoord|pincode|toegangscode|verificatiecode|beveiligingscode|eenmalige.code", // nl
+                    "密码|密碼|口令|个人识别码|個人識別碼|验证码|驗證碼|校验码|校驗碼|动态码|動態碼|安全码|安全碼|一次性密码|一次性密碼", // zh
+                    "認証コード|確認コード|検証コード|暗証番号|パスワード|セキュリティコード|ワンタイム", // ja
+                    "비밀.?번호|핀.?(?:번호|코드)|인증.?(?:번호|코드)|확인.?코드|보안.?코드|일회용.?(?:비밀번호|코드)", // ko
+                    "पासवर्ड|कूटशब्द|ओटीपी|पिन|सत्यापन|सुरक्षा.कोड|एक.बार.(?:का.पासवर्ड|उपयोग)", // hi
+                    "كلمة.(?:المرور|السر)|الرقم.السري|رقم.التعريف.الشخصي|رمز.(?:التأكيد|التحقق|الأمان|الدخول)|كود.التحقق|رمز.لمرة.واحدة", // ar
+                    "пароль|пин.?код|секретный.код|код.(?:подтверждения|проверки|безопасности|доступа)|одноразовый.(?:код|пароль)", // ru
+                    "hasło|kod.weryfikacyjny|парол|код.підтвердження|şifre|doğrulama.kodu|kata.sandi|kode.verifikasi|mật.khẩu|mã.xác.minh"));
     private static final Pattern PIN_INDICATOR = Pattern.compile("[●•○◦\\s]+");
     /** One credential signal protects every input path in the application window. */
     private static boolean sensitiveWindow(AccessibilityNodeInfo n) {
