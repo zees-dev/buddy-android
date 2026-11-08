@@ -135,14 +135,6 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.getPackageName() != null
-                && Guard.settingsPackage(this, event.getPackageName().toString()) && event.getClassName() != null) {
-            String name = event.getClassName().toString();
-            try {
-                getPackageManager().getActivityInfo(new android.content.ComponentName(event.getPackageName().toString(), name), 0);
-                settingsActivity = name;
-            } catch (android.content.pm.PackageManager.NameNotFoundException ignored) { }
-        }
         if (bubble == null) return;
         int type = event.getEventType();
         if (type == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) { // only toasts; notifications aren't read here
@@ -369,10 +361,6 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         main.post(task);
         McpServer.awaitEffect(task);
     }
-
-    private volatile String settingsActivity;
-
-    String settingsActivity() { return settingsActivity; }
 
     /** The name of the app on screen (for approval cards), or null. */
     String foregroundAppName() {

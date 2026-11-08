@@ -451,13 +451,15 @@ final class Guard {
 
     private static boolean ordinarySettings(BuddyService svc, AccessibilityWindowInfo window) {
         String pkg = window.getRoot().getPackageName().toString();
-        String activity = svc.settingsActivity();
         if (!settingText(svc, pkg, window.getTitle(), SETTINGS_PAGES)) return false;
-        // Android can restore an activity without reporting its class again. The page's own heading remains current;
-        // a dialog or arbitrary SubSettings fragment cannot borrow a remembered activity's permission.
+        // Restored activities need not report their class. Check the live page, not a remembered activity.
         if (settingsHeading(window.getRoot(), window.getTitle(), 0)) return true;
-        return settingText(svc, pkg, window.getTitle(), "settings_label", "settings_label_launcher")
-                && activity != null && (activity.equals(pkg + ".Settings") || activity.endsWith(".homepage.SettingsHomepageActivity"));
+        if (settingText(svc, pkg, window.getTitle(), "settings_label", "settings_label_launcher")) {
+            for (String id : new String[]{"homepage_container", "settings_homepage_container"})
+                if ((pkg + ":id/" + id).equals(window.getRoot().getViewIdResourceName())
+                        || !window.getRoot().findAccessibilityNodeInfosByViewId(pkg + ":id/" + id).isEmpty()) return true;
+        }
+        return false;
     }
 
     private static boolean settingsHeading(AccessibilityNodeInfo n, CharSequence title, int depth) {
