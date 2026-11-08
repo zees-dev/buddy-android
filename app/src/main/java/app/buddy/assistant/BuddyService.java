@@ -936,12 +936,12 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         try {
             answered = awaitAnswer(done, rule ? 60_000L : 5 * 60_000L, stepDone);
         } finally {
+            main.post(() -> bubble.cancelConfirm(cb));
             Triggers.approvalDone(this, chat);
         }
         boolean usedScreen = handsOn || cardTouches != touches;
         if (usedScreen) rereadNeeded = true;
         if (!answered) {
-            main.post(() -> bubble.cancelConfirm(cb));
             String step = stepDone == null ? null : stepDone.get();
             if (step != null) {
                 return step + " Buddy saw it and closed the question for them. Call read_screen before going on.";
