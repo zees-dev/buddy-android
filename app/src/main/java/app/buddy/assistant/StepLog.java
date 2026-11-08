@@ -97,6 +97,7 @@ final class StepLog {
     private static void shoot(BuddyService svc, File out) {
         try {
             Thread.sleep(600);
+            if (Guard.humanOnly(svc) || Guard.sensitiveDestination(svc)) return;
             int[] left = {350};
             for (android.view.accessibility.AccessibilityWindowInfo w : svc.getWindows()) {
                 if (w.getType() == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
@@ -133,8 +134,7 @@ final class StepLog {
     }
 
     private static boolean sensitive(android.view.accessibility.AccessibilityNodeInfo n, int[] left) {
-        if (n == null || --left[0] < 0) return true;
-        if (n.isEditable() && Guard.sensitiveInput(n)) return true;
+        if (n == null || --left[0] < 0 || n.isEditable() && Guard.redactInput(n)) return true;
         for (int i = 0; i < n.getChildCount(); i++) if (sensitive(n.getChild(i), left)) return true;
         return false;
     }

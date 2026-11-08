@@ -323,7 +323,6 @@ final class Tools {
 
     // ------------------------------------------------------------ dispatch
 
-    /** A tool call, plus anything the user added while the agent works (see ChatHub.takeNotes). */
     /** The actions "View steps" keeps (see StepLog). */
     private static final java.util.Set<String> STEPPED = new java.util.HashSet<>(java.util.Arrays.asList(
             "tap", "long_press", "type_text", "scroll", "swipe", "press", "open_app", "open_url", "do_steps", "collect",
@@ -1310,9 +1309,9 @@ final class Tools {
             this.args = input.toString();
             this.target = target;
             typing = name.startsWith("type_text") || "clipboard_write".equals(name);
-            identity = identity(target);
-            description = name + " " + args + "\nTarget: " + (target != null && target.isEditable() && Guard.sensitiveInput(target)
-                    ? target.getPackageName() + "/" + target.getWindowId() + "/" + target.getViewIdResourceName() + " [sensitive field]" : identity);
+            identity = identity(target, false);
+            description = name + " " + args + "\nTarget: "
+                    + identity(target, sensitive || target != null && target.isEditable() && Guard.redactInput(target));
         }
 
         boolean valid() {
@@ -1323,7 +1322,7 @@ final class Tools {
             return svc.controlRevoked() == null && !svc.paused() && !Guard.humanOnly(svc)
                     && sensitive == Guard.sensitiveDestination(svc) && (!sensitive || needsApproval)
                     && args.equals(input.toString()) && (!needsApproval || screen != null && screen.equals(screenPrint())
-                    && (target == null || target.refresh() && identity.equals(identity(target))));
+                    && (target == null || target.refresh() && identity.equals(identity(target, false))));
         }
 
         /** Android restores app focus and its accessibility snapshot after the approval overlay closes. */
@@ -1337,12 +1336,12 @@ final class Tools {
         }
     }
 
-    private static String identity(AccessibilityNodeInfo n) {
+    private static String identity(AccessibilityNodeInfo n, boolean redact) {
         if (n == null) return "unknown";
         Rect r = new Rect();
         n.getBoundsInScreen(r);
         return n.getPackageName() + "/" + n.getWindowId() + "/" + n.getViewIdResourceName() + "/" + r
-                + "/" + n.getClassName() + "/" + n.getText() + "/" + n.getContentDescription();
+                + "/" + n.getClassName() + (redact ? " [sensitive window]" : "/" + n.getText() + "/" + n.getContentDescription());
     }
 
     private static final String HUMAN_ONLY = "BLOCKED: installers, permissions, security settings and Buddy controls require the human. Ask the user to do this step.";
@@ -1499,7 +1498,7 @@ final class Tools {
         Guard.remember(svc, label, pkg, app);
         if (!ruleRun() && Guard.listed(svc, "allow", label, pkg)) return null; // the user said: never ask for this one
         AccessibilityNodeInfo field = findFocusedInput();
-        CharSequence draft = field == null || field.isShowingHintText() || Guard.sensitiveInput(field) ? null : field.getText();
+        CharSequence draft = field == null || field.isShowingHintText() || Guard.redactInput(field) ? null : field.getText();
         String what = "Tap “" + (label == null ? "this" : label) + "”"; // for the agent and the reviewer
         java.util.function.Function<String, String> card = in -> tapCard(label, in); // the same, on the user's card
         boolean userAsks = Guard.listed(svc, "ask", label, pkg);
@@ -1622,7 +1621,6 @@ final class Tools {
         if (target == null) target = findFocusedInput();
         if (target == null)
             throw new IllegalStateException("No text field is focused. Tap the text field first, then type.");
-        if (!target.refresh()) return CHANGED;
         if (Guard.offLimits(svc, target)) return "BLOCKED: that's Buddy's own screen. Only the user types there.";
         if (Guard.humanOnly(svc)) return HUMAN_ONLY;
         McpServer.requireActive();
@@ -1682,7 +1680,6 @@ final class Tools {
         return result;
     }
 
-    /** Is the node part of a web page (Chrome, an app's WebView)? */
     private static boolean inWeb(AccessibilityNodeInfo n) {
         AccessibilityNodeInfo p = n;
         for (int i = 0; p != null && i < 60; i++, p = p.getParent()) {
@@ -1839,7 +1836,7 @@ final class Tools {
         return off ? "BLOCKED: that's one of Buddy's own screens. Only the user touches those." : guardInput();
     }
 
-    private boolean gesture(Path path, long durationMs, Binding... bindings) throws InterruptedException {
+    private boolean gesture(Path path, long durationMs, Binding binding) throws InterruptedException {
         svc.setBubblePassThrough(true);
         try {
             final CountDownLatch done = new CountDownLatch(1);
@@ -1847,7 +1844,7 @@ final class Tools {
             GestureDescription g = new GestureDescription.Builder()
                     .addStroke(new GestureDescription.StrokeDescription(path, 0, durationMs)).build();
             if (Guard.humanOnly(svc) || svc.paused()) return false; // the user took the phone since this call began
-            for (Binding binding : bindings) if (!binding.valid()) return false;
+            if (!binding.valid()) return false;
             if (!McpServer.callerActive()) return false;
             svc.autoPauser().ownGesture(durationMs); // Buddy's own touch: not the user taking the phone
             boolean dispatched = svc.dispatchGesture(g, new AccessibilityService.GestureResultCallback() {
@@ -1873,9 +1870,6 @@ final class Tools {
 
     private String press(String button) throws Exception {
         McpServer.requireActive();
-        if (!("back".equals(button) || "home".equals(button))) {
-            if (Guard.humanOnly(svc)) return HUMAN_ONLY;
-        }
         int action;
         switch (button) {
             case "back": action = AccessibilityService.GLOBAL_ACTION_BACK; break;
@@ -1886,6 +1880,7 @@ final class Tools {
             default: throw new IllegalArgumentException("Unknown button " + button);
         }
         if (!("back".equals(button) || "home".equals(button))) {
+            if (Guard.humanOnly(svc)) return HUMAN_ONLY;
             this.action.set(new Binding("press", new JSONObject().put("button", button), null));
             String blocked = guardInput();
             if (blocked != null) return blocked;

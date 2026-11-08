@@ -239,7 +239,7 @@ final class Guard {
     }
 
     private static String shortLabel(AccessibilityNodeInfo n) {
-        if (n.isEditable() && sensitiveInput(n)) return "Sensitive field";
+        if (n.isEditable() && redactInput(n)) return "Sensitive field";
         for (CharSequence cs : new CharSequence[]{n.getText(), n.getContentDescription()}) {
             if (cs == null) continue;
             String s = cs.toString().trim().replaceAll("\\s+", " ");
@@ -432,13 +432,13 @@ final class Guard {
         return false;
     }
 
-    private static boolean protectedSettingsPage(BuddyService svc, AccessibilityNodeInfo n) {
+    private static boolean protectedSettings(BuddyService svc, AccessibilityNodeInfo n, boolean page) {
         if (n == null) return false;
-        if (n.isHeading() && (protectedSetting(svc, n.getPackageName(), n.getText())
-                || protectedSetting(svc, n.getPackageName(), n.getContentDescription()))) return true;
-        if (protectedSetting(svc, n.getPackageName(), n.getPaneTitle())) return true;
-        for (int i = 0; i < n.getChildCount(); i++)
-            if (protectedSettingsPage(svc, n.getChild(i))) return true;
+        if (page && (n.isPassword() || n.isEditable() || n.getInputType() != 0) && credentialSignal(n)) return true;
+        if ((!page || n.isHeading()) && (protectedSetting(svc, n.getPackageName(), n.getText()) || protectedSetting(svc, n.getPackageName(), n.getContentDescription()))
+                || (page ? protectedSetting(svc, n.getPackageName(), n.getPaneTitle())
+                : PROTECTED_SETTING.matcher(n.getText() + " " + n.getContentDescription() + " " + n.getViewIdResourceName()).find())) return true;
+        for (int i = 0; i < n.getChildCount(); i++) if (protectedSettings(svc, n.getChild(i), page)) return true;
         return false;
     }
 
@@ -446,17 +446,7 @@ final class Guard {
         if (target == null || target.getPackageName() == null || !settingsPackage(svc, target.getPackageName().toString())) return true;
         AccessibilityNodeInfo button = target;
         while (button.getParent() != null && !button.isClickable()) button = button.getParent();
-        return !protectedSettingsLink(svc, button, 0);
-    }
-
-    private static boolean protectedSettingsLink(BuddyService svc, AccessibilityNodeInfo n, int depth) {
-        if (n == null || depth > 5) return false;
-        String pkg = String.valueOf(n.getPackageName());
-        if (protectedSetting(svc, pkg, n.getText())
-                || protectedSetting(svc, pkg, n.getContentDescription())
-                || PROTECTED_SETTING.matcher(n.getText() + " " + n.getContentDescription() + " " + n.getViewIdResourceName()).find()) return true;
-        for (int i = 0; i < n.getChildCount(); i++) if (protectedSettingsLink(svc, n.getChild(i), depth + 1)) return true;
-        return false;
+        return !protectedSettings(svc, button, false);
     }
 
     static boolean offLimits(android.content.Context c, AccessibilityNodeInfo n) {
@@ -472,17 +462,18 @@ final class Guard {
             + "mot.de.passe|code.d.accès|code.de.vérification|passwort|kennwort|einmalcode|bestätigungscode|contraseña|código.de.acceso|código.de.verificación|"
             + "senha|código.de.verificação|codice.di.verifica|wachtwoord|verificatiecode|hasło|kod.weryfikacyjny|пароль|код.подтверждения|"
             + "парол|код.підтвердження|şifre|doğrulama.kodu|पासवर्ड|ओटीपी|पिन|सत्यापन|kata.sandi|kode.verifikasi|mật.khẩu|mã.xác.minh|كلمة.المرور|رمز.التأكيد|رمز.التحقق");
+    private static final Pattern PIN_INDICATOR = Pattern.compile("[●•○◦\\s]+");
     /** One credential signal protects every input path in the application window. */
     private static boolean sensitiveWindow(AccessibilityNodeInfo n) {
         if (n == null) return true;
-        if (sensitiveInput(n)) return true;
+        if (credentialSignal(n)) return true;
         for (int i = 0; i < n.getChildCount(); i++)
             if (sensitiveWindow(n.getChild(i))) return true;
         return false;
     }
 
     /** Accessibility does not expose View autofill hints uniformly; also check input types, hints and exposed extras. */
-    static boolean sensitiveInput(AccessibilityNodeInfo n) {
+    private static boolean credentialSignal(AccessibilityNodeInfo n) {
         if (n == null || n.isPassword()) return true;
         if (android.os.Build.VERSION.SDK_INT >= 34 && n.isAccessibilityDataSensitive()) return true;
         int type = n.getInputType(), cls = type & android.text.InputType.TYPE_MASK_CLASS;
@@ -491,13 +482,34 @@ final class Guard {
                 || variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
                 || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)
                 || cls == android.text.InputType.TYPE_CLASS_NUMBER && variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) return true;
-        String hints = n.getText() + " " + n.getHintText() + " " + n.getViewIdResourceName() + " " + n.getContentDescription();
+        String hints = (!n.isEditable() || n.isShowingHintText() ? n.getText() : "") + " "
+                + n.getHintText() + " " + n.getViewIdResourceName() + " " + n.getContentDescription();
         for (String key : n.getExtras().keySet()) {
             if (!key.toLowerCase(Locale.ROOT).contains("autofill")) continue;
             Object value = n.getExtras().get(key);
             hints += " " + (value instanceof Object[] ? java.util.Arrays.toString((Object[]) value) : value);
         }
+        for (CharSequence label : new CharSequence[]{n.getText(), n.getContentDescription(), n.getHintText()})
+            if (label != null && PIN_INDICATOR.matcher(label.toString().trim()).matches()) return true;
         return SENSITIVE_INPUT.matcher(hints).find() || hints.matches("(?s).*[●•○◦]{3,}.*");
+    }
+
+    private static final Pattern ORDINARY_INPUT = Pattern.compile(
+            "(?i)^(message|search|title|notes?|subject|comment|reply|compose|description|filename|file name|query)([ .\u2026:_-].*)?$");
+
+    /** Unclassified editor values stay out of saved notes and screenshots. */
+    static boolean redactInput(AccessibilityNodeInfo n) {
+        if (credentialSignal(n)) return true;
+        int type = n.getInputType(), variation = type & android.text.InputType.TYPE_MASK_VARIATION;
+        if ((type & android.text.InputType.TYPE_MASK_CLASS) != android.text.InputType.TYPE_CLASS_TEXT) return true;
+        if (variation == android.text.InputType.TYPE_TEXT_VARIATION_URI || variation == android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
+                || variation == android.text.InputType.TYPE_TEXT_VARIATION_SHORT_MESSAGE || variation == android.text.InputType.TYPE_TEXT_VARIATION_LONG_MESSAGE) return false;
+        String id = n.getViewIdResourceName();
+        if (id != null) id = id.substring(id.lastIndexOf('/') + 1);
+        for (CharSequence purpose : new CharSequence[]{n.getHintText(), n.getContentDescription(), id})
+            if (purpose != null && ORDINARY_INPUT.matcher(purpose.toString().trim()).matches()) return false;
+        return true;
     }
 
     static boolean sensitiveDestination(BuddyService svc) {
@@ -520,7 +532,7 @@ final class Guard {
             if (type != AccessibilityWindowInfo.TYPE_APPLICATION && !w.isActive() && !w.isFocused()) continue;
             AccessibilityNodeInfo root = w.getRoot();
             if (root == null || offLimits(svc, root)) return true;
-            if (root.getPackageName() != null && settingsPackage(svc, root.getPackageName().toString()) && (protectedSetting(svc, root.getPackageName(), w.getTitle()) || protectedSettingsPage(svc, root))) return true;
+            if (root.getPackageName() != null && settingsPackage(svc, root.getPackageName().toString()) && (protectedSetting(svc, root.getPackageName(), w.getTitle()) || protectedSettings(svc, root, true))) return true;
         }
         return false;
     }
