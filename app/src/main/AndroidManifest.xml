@@ -43,6 +43,9 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <intent>
+            <action android:name="android.settings.APP_SEARCH_SETTINGS" />
+        </intent>
     </queries>
 
     <application

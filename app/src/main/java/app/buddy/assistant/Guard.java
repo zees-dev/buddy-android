@@ -399,9 +399,12 @@ final class Guard {
     }
 
     static boolean settingsPackage(android.content.Context c, String pkg) {
-        android.content.pm.ResolveInfo to = c.getPackageManager().resolveActivity(
-                new android.content.Intent(android.provider.Settings.ACTION_SETTINGS), 0);
-        return to != null && to.activityInfo != null && pkg.equals(to.activityInfo.packageName);
+        for (String action : new String[]{android.provider.Settings.ACTION_SETTINGS, "android.settings.APP_SEARCH_SETTINGS"}) {
+            android.content.pm.ResolveInfo to = c.getPackageManager().resolveActivity(
+                    new android.content.Intent(action), android.content.pm.PackageManager.MATCH_SYSTEM_ONLY);
+            if (to != null && to.activityInfo != null && pkg.equals(to.activityInfo.packageName)) return true;
+        }
+        return false;
     }
 
     private static final String[] PROTECTED_SETTINGS = {"accessibility_settings", "accessibility_settings_title",
@@ -418,11 +421,14 @@ final class Guard {
             + "overlay|display.over.other.apps|notification.?access|usage.?access|device.?admin|credential|\\bpin\\b");
 
     /** Protected destinations use the system app's localized resources. */
-    private static boolean protectedSetting(BuddyService c, CharSequence packageName, CharSequence text) {
+    private static boolean protectedSetting(BuddyService c, CharSequence text) {
         if (text == null || text.length() == 0) return false;
         if (PROTECTED_SETTING.matcher(text).find()) return true;
-        String pkg = String.valueOf(packageName);
         try {
+            android.content.pm.ResolveInfo settings = c.getPackageManager().resolveActivity(
+                    new android.content.Intent(android.provider.Settings.ACTION_SETTINGS), android.content.pm.PackageManager.MATCH_SYSTEM_ONLY);
+            if (settings == null || settings.activityInfo == null) return false;
+            String pkg = settings.activityInfo.packageName;
             android.content.res.Resources resources = c.getPackageManager().getResourcesForApplication(pkg);
             for (String name : PROTECTED_SETTINGS) {
                 int id = resources.getIdentifier(name, "string", pkg);
@@ -435,8 +441,8 @@ final class Guard {
     private static boolean protectedSettings(BuddyService svc, AccessibilityNodeInfo n, boolean page) {
         if (n == null) return false;
         if (page && (n.isPassword() || n.isEditable() || n.getInputType() != 0) && credentialSignal(n)) return true;
-        if ((!page || n.isHeading()) && (protectedSetting(svc, n.getPackageName(), n.getText()) || protectedSetting(svc, n.getPackageName(), n.getContentDescription()))
-                || (page ? protectedSetting(svc, n.getPackageName(), n.getPaneTitle())
+        if ((!page || n.isHeading()) && (protectedSetting(svc, n.getText()) || protectedSetting(svc, n.getContentDescription()))
+                || (page ? protectedSetting(svc, n.getPaneTitle())
                 : PROTECTED_SETTING.matcher(n.getText() + " " + n.getContentDescription() + " " + n.getViewIdResourceName()).find())) return true;
         for (int i = 0; i < n.getChildCount(); i++) if (protectedSettings(svc, n.getChild(i), page)) return true;
         return false;
@@ -532,7 +538,8 @@ final class Guard {
             if (type != AccessibilityWindowInfo.TYPE_APPLICATION && !w.isActive() && !w.isFocused()) continue;
             AccessibilityNodeInfo root = w.getRoot();
             if (root == null || offLimits(svc, root)) return true;
-            if (root.getPackageName() != null && settingsPackage(svc, root.getPackageName().toString()) && (protectedSetting(svc, root.getPackageName(), w.getTitle()) || protectedSettings(svc, root, true))) return true;
+            if (root.getPackageName() != null && settingsPackage(svc, root.getPackageName().toString())
+                    && (protectedSetting(svc, w.getTitle()) || protectedSettings(svc, root, true))) return true;
         }
         return false;
     }
