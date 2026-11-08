@@ -1314,6 +1314,16 @@ final class Tools {
                     && args.equals(input.toString()) && (!needsApproval || screen != null && screen.equals(screenPrint())
                     && target != null && target.refresh() && identity.equals(identity(target)));
         }
+
+        /** Android restores app focus and its accessibility snapshot after the approval overlay closes. */
+        boolean awaitValid() throws InterruptedException {
+            long until = android.os.SystemClock.uptimeMillis() + 1000;
+            while (!valid()) {
+                if (!McpServer.callerActive() || android.os.SystemClock.uptimeMillis() >= until) return false;
+                Thread.sleep(25);
+            }
+            return true;
+        }
     }
 
     private static String identity(AccessibilityNodeInfo n) {
@@ -1548,7 +1558,7 @@ final class Tools {
             summary += "\n" + binding.description;
         }
         String answer = binding != null && binding.typing ? svc.askInputConfirm(summary) : svc.askConfirm(summary, send);
-        if (answer.startsWith("APPROVED")) return binding == null || binding.valid() ? null : CHANGED;
+        if (answer.startsWith("APPROVED")) return binding == null || binding.awaitValid() ? null : CHANGED;
         if (answer.startsWith("CHANGES")) return "Not tapped: the user wants changes first. " + answer;
         return "BLOCKED by Buddy's safety rule: the user did not approve “" + what + "”. Don't retry it; "
                 + "ask the user what they want.";
@@ -1587,6 +1597,7 @@ final class Tools {
             entry.needsApproval = true;
             String answer = svc.askInputConfirm(svc.getString(R.string.tools_card_sensitive_entry, entry.description));
             if (!answer.startsWith("APPROVED")) return "BLOCKED: sensitive text entry requires the human's approval.";
+            if (!entry.awaitValid()) return CHANGED;
         }
         if (!entry.valid()) return CHANGED;
         if (!sensitive && Guard.sensitiveInput(target)) return "BLOCKED: field became sensitive. Request a new approval.";
