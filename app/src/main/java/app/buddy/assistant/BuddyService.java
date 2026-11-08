@@ -871,16 +871,17 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
             java.util.function.BooleanSupplier gone = McpServer.CALLER_GONE.get();
             long end = System.currentTimeMillis() + waitMs;
             while (ended == null && !done.await(1, TimeUnit.SECONDS)) {
-                if (stale != null && stale.getAsBoolean()) ended = STALE;
+                if (McpServer.CALLER_SESSION.get() != null && !McpServer.callerActive()) ended = TIMED_OUT;
+                else if (stale != null && stale.getAsBoolean()) ended = STALE;
                 else if (System.currentTimeMillis() >= end || gone != null && gone.getAsBoolean()) ended = TIMED_OUT;
             }
         } finally {
+            main.post(() -> bubble.cancelConfirm(cb));
             Triggers.approvalDone(this, chat);
         }
         if (cardTouches != touches) rereadNeeded = true; // they used the screen meanwhile: ids may be stale
         if (McpServer.CALLER_SESSION.get() != null && !McpServer.callerActive()) return "DENIED: request session ended.";
         if (ended != null) {
-            main.post(() -> bubble.cancelConfirm(cb));
             return ended;
         }
         if (auto.get()) return AUTO_APPROVED;
