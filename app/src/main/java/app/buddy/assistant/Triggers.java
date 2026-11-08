@@ -419,7 +419,6 @@ final class Triggers implements ChatHub.Listener {
         Sessions.Session ses = chat(hub, j);
         ses.model = r.model; // the rule's choice, also when it changed since the chat's last run
         j.chat = ses.id;
-        Guard.forget(ses.id); // an approval from this chat's earlier run doesn't cover this one
         active.put(ses.id, j);
         String err = hub.sendFromRule(ses, shown(j), prompt(j));
         if (err != null) {
@@ -435,7 +434,6 @@ final class Triggers implements ChatHub.Listener {
 
     private void finished(Job j, Sessions.Session s) {
         active.remove(j.chat);
-        Guard.forget(j.chat);
         if (active.isEmpty()) releaseWake();
         approvalDone(app, j.chat);
         String reply = s == null ? "" : Ui.linkText(s.lastReply).trim(); // for the log and its notification: plain text

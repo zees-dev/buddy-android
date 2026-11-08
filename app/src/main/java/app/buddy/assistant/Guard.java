@@ -12,8 +12,8 @@ import java.util.regex.Pattern;
  * The hard limit behind "Buddy asks before anything risky", for the apps the user puts on it (Settings →
  * App permissions; trusted apps leave asking to the agent). Enforced here, in Buddy: before a tap lands on a
  * send / pay / delete / … button (by its text, icon description or id), or text is typed with "submit", the
- * user must have approved it: either through the agent's own confirm call just
- * before (one approval covers one action), or on a card Buddy shows right then. The agent can't tap Buddy's
+ * user must approve that action on the card Buddy shows in the executing call. Plan confirmations cannot
+ * authorize later actions. The agent can't tap Buddy's
  * own bubble or approval card, so it can't approve for the user.
  */
 final class Guard {
@@ -78,22 +78,6 @@ final class Guard {
     private static final Pattern SEND_ID = Pattern.compile("(?i)(^|\\s)(send|sendbutton|post|reply)(\\s|$)");
     /** Resource ids of send buttons that only have an icon (e.g. WhatsApp's "send"). */
     private static final Pattern RISKY_ID = Pattern.compile("(?i)[:/_](send|send_button|sendbutton|btn_send|delete|pay|buy|post|submit|add-to-cart|add_to_cart|addtocart)\\b");
-    // long enough for a slow multi-step task between the plan's approval and its risky tap
-    private static final long APPROVAL_VALID_MS = 600_000;
-
-    private static long approvedAt, planAt;
-    /** The pending approval came from a rule's countdown, not from the user: it covers sending only. */
-    private static boolean approvedAuto;
-    /** The last approved confirm's text: the plan the user OK'd, for the smart reviewer. */
-    private static String plan;
-    /**
-     * The chat whose confirm the approval and the plan were (null: a session outside Buddy): they cover that chat's
-     * actions only, never another agent's, least of all a notification rule's run for someone else's message.
-     */
-    private static String approvedFor, planFor;
-    /** What the pending approval's confirm said: a message whose text is known must be that one (see takeApproval). */
-    private static String approvedText;
-
     /** Apps that start on "hard limit": messaging, email, social, calls, shopping, payments, banking. */
     private static final java.util.Set<String> HARD_BY_DEFAULT = new java.util.HashSet<>(java.util.Arrays.asList(
             "com.whatsapp", "com.whatsapp.w4b", "com.google.android.apps.messaging", "com.samsung.android.messaging",
@@ -301,70 +285,9 @@ final class Guard {
     private Guard() {
     }
 
-    /** The agent's confirm was approved: that covers the next risky action. */
-    static synchronized void approved(String summary) {
-        approved(summary, false);
-    }
-
-    /**
-     * auto: a notification rule's countdown approved it, not the user. Then it covers the next action only if that
-     * sends something, and it isn't a plan the user OK'd (the smart reviewer doesn't get it as one).
-     */
-    static synchronized void approved(String summary, boolean auto) {
-        approvedAt = System.currentTimeMillis();
-        approvedAuto = auto;
-        approvedFor = McpServer.CALLER_CHAT.get();
-        approvedText = summary;
-        if (auto) return;
-        planAt = approvedAt;
-        plan = summary;
-        planFor = approvedFor;
-    }
-
-    /**
-     * What the user approved for the calling chat in the last 10 minutes (it stays known after the approval is
-     * used), or null.
-     */
-    static synchronized String approvedPlan() {
-        return plan != null && System.currentTimeMillis() - planAt < APPROVAL_VALID_MS
-                && java.util.Objects.equals(planFor, McpServer.CALLER_CHAT.get()) ? plan : null;
-    }
-
-    /** A chat's run starts or ends: what was approved for it before doesn't carry over. */
-    static synchronized void forget(String chat) {
-        if (java.util.Objects.equals(approvedFor, chat)) approvedAt = 0;
-        if (java.util.Objects.equals(planFor, chat)) plan = null;
-    }
-
-    /** Use the pending approval, if any (one approval, one action). */
-    static synchronized boolean takeApproval() {
-        return takeApproval(true);
-    }
-
-    /**
-     * As above; send: the action sends something (a countdown's approval covers nothing else). Only the chat that
-     * got the approval can use it: another chat's attempt leaves it in place.
-     */
-    static synchronized boolean takeApproval(boolean send) {
-        return takeApproval(send, null);
-    }
-
-    /**
-     * As above, for an action whose content Buddy knows (a reply's text, a link): the approval covers it only if
-     * the approved confirm named exactly that, so an OK for one message never sends another. Used up either way.
-     */
-    static synchronized boolean takeApproval(boolean send, String content) {
-        if (approvedAt == 0 || !java.util.Objects.equals(approvedFor, McpServer.CALLER_CHAT.get())) return false;
-        boolean ok = System.currentTimeMillis() - approvedAt < APPROVAL_VALID_MS && (send || !approvedAuto)
-                && (content == null || approvedText != null && plain(approvedText).contains(plain(content)));
-        approvedAt = 0;
-        return ok;
-    }
-
-    /** For comparing what was approved with what's sent: case, spacing and quote styles don't matter. */
-    private static String plain(String s) {
-        return s.toLowerCase(java.util.Locale.ROOT).replaceAll("[\u201c\u201d\u201e\u00ab\u00bb\u2018\u2019\"']", "")
-                .replaceAll("\\s+", " ").trim();
+    /** Plan confirmations never grant authority to another action. Kept for the optional browser caller. */
+    static boolean takeApproval(boolean send) {
+        return false;
     }
 
     /**

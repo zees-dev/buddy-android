@@ -176,10 +176,11 @@ final class Tools {
                         .put("max_scrolls", intProp("Default 10, max 30")),
                 "text"));
         t.put(tool("confirm",
-                "Ask the user to approve an action in the Buddy bubble and wait for the answer. "
+                "Ask the user to approve a plan in the Buddy bubble and wait for the answer. "
                         + "REQUIRED before sending messages, posting, buying, deleting, or changing settings. "
                         + "Show the exact text or action. Returns APPROVED, DENIED, or CHANGES REQUESTED with "
-                        + "what the user wants changed: then make those changes and call confirm again.",
+                        + "what the user wants changed: then make those changes and call confirm again. "
+                        + "This grants no authority to later tool calls; each protected action asks separately.",
                 props().put("summary", strProp("Exactly what you are about to do, including any text to be sent")),
                 "summary"));
         t.put(tool("ask",
@@ -228,8 +229,7 @@ final class Tools {
         t.put(tool("reply_notification",
                 "Answer the notification that started this chat through its own reply field, without opening the app. "
                         + "Only in chats started by one of the user's notification rules, when the notification has a reply "
-                        + "field. Buddy shows the user an approval card with the text first, unless you called confirm "
-                        + "with it just before.",
+                        + "field. Buddy shows an approval card bound to this notification and the exact reply text.",
                 props().put("text", strProp("The reply, exactly as it should be sent")), "text"));
         t.put(tool("schedule_message",
                 "Schedule a message to yourself in this chat, sent once at a later time: to check something again, "
@@ -329,7 +329,16 @@ final class Tools {
             "tap", "long_press", "type_text", "scroll", "swipe", "press", "open_app", "open_url", "do_steps", "collect",
             "find", "take_photo", "set_alarm", "set_timer", "share", "save_to_downloads", "add_calendar_event", "media"));
 
-    JSONObject call(String name, JSONObject a) throws Exception {
+    synchronized JSONObject call(String name, JSONObject a) throws Exception {
+        try {
+            return callLogged(name, a);
+        } finally {
+            action.remove();
+        }
+    }
+
+    private JSONObject callLogged(String name, JSONObject a) throws Exception {
+        if (!McpServer.callerActive()) return text("BLOCKED: request session ended.");
         JSONObject r = call0(name, a);
         if (STEPPED.contains(name)) {
             JSONArray content = r.optJSONArray("content");
@@ -393,7 +402,7 @@ final class Tools {
             case "list_apps": return text(listApps());
             case "open_url": {
                 // a rule's run works for someone else's message: a link could carry the user's data away
-                if (ruleRun() && !Guard.takeApproval(false, a.getString("url"))) {
+                if (ruleRun()) {
                     String answer = svc.askConfirm(svc.getString(R.string.tools_card_open_url, a.getString("url")), false);
                     if (!answer.startsWith("APPROVED")) return text("Not opened. " + answer);
                 }
@@ -410,24 +419,8 @@ final class Tools {
                 return text("Waited " + ms + " ms.");
             }
             case "confirm": {
-                if (!ruleRun() && Guard.autonomous(svc, svc.foregroundPkg())) {
-                    // no card in an app the user trusts; not counted as approval for a tap in another app
-                    return text("APPROVED automatically: the user trusts " + svc.foregroundAppName() + ", so work on "
-                            + "your own there without calling confirm. Apps on Hard or Smart still ask the user.");
-                }
-                String summary = a.getString("summary");
-                if (!ruleRun() && Guard.routineText(summary) && Guard.runRule(svc, svc.foregroundPkg())) {
-                    // the user allowed this app until the run ends: as after a countdown, it covers sending, nothing more
-                    Guard.approved(summary, true);
-                    noteInChat(McpServer.CALLER_CHAT.get(), svc.getString(R.string.run_rule_approved, summary));
-                    return text("APPROVED by the user's rule for this run: they allowed routine steps in "
-                            + svc.foregroundAppName() + " without asking. Go ahead with this, and only this. Paying, "
-                            + "buying, deleting, installing, passwords and security settings still need their OK.");
-                }
-                String answer = svc.askConfirm(summary, true);
-                // covers the next risky tap (after a rule's countdown, only a send)
-                if (answer.startsWith("APPROVED")) Guard.approved(a.getString("summary"), answer.equals(BuddyService.AUTO_APPROVED));
-                return text(answer);
+                String answer = svc.askConfirm(a.getString("summary"), false);
+                return text(answer + " This approves the plan only. Each protected action asks separately for its exact target and arguments.");
             }
             case "ask": {
                 JSONArray o = a.optJSONArray("options");
@@ -727,9 +720,8 @@ final class Tools {
         }
         if (Triggers.userAnswered(chat)) return answeredItself(n);
         if (Triggers.wroteAgain(chat)) return wroteAgain(chat, n);
-        // like a tap on Send (in a rule's run, where Trust doesn't apply): the confirm just before covers it, or a card
-        // asks now; if the user doesn't answer in time, the reply waits in their list and the run ends
-        if (!Guard.takeApproval(true, text)) { // an approval covers this reply only if it was for this very text
+        // If the user doesn't answer in time, this exact reply waits in their list and the run ends.
+        { // The approval belongs only to this notification and this reply.
             final String forChat = chat;
             String answer = svc.askRuleReply(svc.getString(R.string.tools_card_reply, n.who(), n.app, text), chat,
                     () -> Triggers.wroteAgain(forChat) || Triggers.userAnswered(forChat));
@@ -1292,6 +1284,43 @@ final class Tools {
 
     // ------------------------------------------------------------- actions
 
+    private static final String CHANGED = "BLOCKED: the action, session or screen changed while waiting. Read the screen and request a new approval.";
+    private final ThreadLocal<Binding> action = new ThreadLocal<>();
+
+    /** An approval lives only in this call, under the server's request identity, with immutable arguments and target. */
+    private final class Binding {
+        final String session = McpServer.CALLER_SESSION.get();
+        final String screen = screenPrint();
+        final String args, description;
+        final JSONObject input;
+        final AccessibilityNodeInfo target;
+        final String identity;
+        boolean needsApproval;
+
+        Binding(String name, JSONObject input, AccessibilityNodeInfo target) {
+            this.input = input;
+            this.args = input.toString();
+            this.target = target;
+            identity = identity(target);
+            description = name + " " + args + "\nTarget: " + identity;
+        }
+
+        boolean valid() {
+            return session != null && session.equals(McpServer.CALLER_SESSION.get()) && McpServer.callerActive()
+                    && svc.controlRevoked() == null && !svc.paused() && !Guard.humanOnly(svc)
+                    && args.equals(input.toString()) && (!needsApproval || screen != null && screen.equals(screenPrint())
+                    && target != null && target.refresh() && identity.equals(identity(target)));
+        }
+    }
+
+    private static String identity(AccessibilityNodeInfo n) {
+        if (n == null) return "unknown";
+        Rect r = new Rect();
+        n.getBoundsInScreen(r);
+        return n.getPackageName() + "/" + n.getWindowId() + "/" + n.getViewIdResourceName() + "/" + r
+                + "/" + n.getClassName() + "/" + n.getText() + "/" + n.getContentDescription();
+    }
+
     private static final String HUMAN_ONLY = "BLOCKED: installers, permissions, security settings and Buddy controls require the human. Ask the user to do this step.";
 
     private String tap(JSONObject a, boolean longPress) throws Exception {
@@ -1304,8 +1333,11 @@ final class Tools {
             x = r.centerX();
             y = r.centerY();
             if (!n.isVisibleToUser() || r.isEmpty()) {
+                Binding binding = new Binding(longPress ? "long_press" : "tap", a, n);
+                action.set(binding);
                 String blocked = guard(n, n);
                 if (blocked != null) return blocked;
+                if (!binding.valid()) return CHANGED;
                 // Off-screen or stale: fall back to an accessibility click.
                 AccessibilityNodeInfo target = clickableAncestor(n, longPress);
                 boolean ok = target != null && target.performAction(longPress
@@ -1324,6 +1356,8 @@ final class Tools {
                     + "there on purpose, give x and y.";
         }
         AccessibilityNodeInfo hit = Guard.nodeAt(svc.getWindows(), x, y);
+        Binding binding = new Binding(longPress ? "long_press" : "tap", a, n != null ? n : hit);
+        action.set(binding);
         String blocked = guard(n, hit);
         if (blocked != null) return blocked;
         String label = Guard.buttonLabel(n != null ? n : hit);
@@ -1333,7 +1367,8 @@ final class Tools {
         p.moveTo(x, y);
         String note = otherButtonNote(n, hit);
         String before = beforeAction();
-        boolean ok = gesture(p, longPress ? 700 : 60);
+        if (!binding.valid()) return CHANGED;
+        boolean ok = gesture(p, longPress ? 700 : 60, binding);
         String done = (ok ? (longPress ? "Long-pressed" : "Tapped") : "Gesture was cancelled at") + " (" + x + ", " + y + ")." + note;
         if (!ok) return done + " Call read_screen to see the result.";
         String after = afterAction(before, 1200);
@@ -1489,15 +1524,13 @@ final class Tools {
     }
 
     /**
-     * A risky action needs the user's OK: the agent's confirm just before, or a card now. what: the action in English,
+     * A risky action needs the user's OK in this call. what: the action in English,
      * for the agent; card: the same action on the card, in the user's language, given the app's name (or null).
      * send: it sends a message, which a notification rule's countdown may approve. byRule: the chat's run rule covers
      * it (see Guard.runRule): it goes ahead without a card, and the chat says so.
      */
     private String guardAction(String what, java.util.function.Function<String, String> card, String detail, boolean send,
                                boolean byRule) throws InterruptedException {
-        // a send's detail is the message itself: an approval for another text doesn't cover it (a card asks instead)
-        if (Guard.takeApproval(send, send ? detail : null)) return null;
         String app = svc.foregroundAppName();
         if (byRule) {
             noteInChat(McpServer.CALLER_CHAT.get(), svc.getString(R.string.run_rule_approved, card.apply(app)));
@@ -1506,8 +1539,13 @@ final class Tools {
         String summary = detail == null || detail.trim().isEmpty() ? card.apply(app)
                 : svc.getString(R.string.tools_card_detail, card.apply(app), detail.contains("\n") || detail.startsWith("“")
                 ? detail.trim() : svc.getString(R.string.tools_card_quote, detail.trim()));
+        Binding binding = action.get();
+        if (binding != null) {
+            binding.needsApproval = true;
+            summary += "\n" + binding.description;
+        }
         String answer = svc.askConfirm(summary, send);
-        if (answer.startsWith("APPROVED")) return null;
+        if (answer.startsWith("APPROVED")) return binding == null || binding.valid() ? null : CHANGED;
         if (answer.startsWith("CHANGES")) return "Not tapped: the user wants changes first. " + answer;
         return "BLOCKED by Buddy's safety rule: the user did not approve “" + what + "”. Don't retry it; "
                 + "ask the user what they want.";
@@ -1566,6 +1604,8 @@ final class Tools {
             }
         }
         if (a.optBoolean("submit")) {
+            Binding binding = new Binding("type_text submit", a, target);
+            action.set(binding);
             String mode = mode(str(target.getPackageName()));
             java.util.function.Function<String, String> card = in -> in == null ? svc.getString(R.string.tools_card_enter)
                     : svc.getString(R.string.tools_card_enter_in, in);
@@ -1576,7 +1616,7 @@ final class Tools {
                     : "smart".equals(mode) ? review("Press Enter to send", card, target, text) : null;
             if (blocked != null) return result + " Not sent: " + blocked;
             Thread.sleep(150);
-            if (Guard.humanOnly(svc)) return HUMAN_ONLY;
+            if (!binding.valid()) return CHANGED;
             boolean sent = target.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
             result += sent ? " Pressed enter." : " Enter action not supported here; tap the send button instead.";
         }
@@ -1670,6 +1710,8 @@ final class Tools {
         // A stroke too short to scroll anything lands as a tap, so it gets every check a tap gets
         int slop = ViewConfiguration.get(svc).getScaledTouchSlop();
         boolean tap = Math.hypot(x2 - x1, y2 - y1) <= slop;
+        Binding binding = new Binding("swipe", a, Guard.nodeAt(svc.getWindows(), x1, y1));
+        action.set(binding);
         String blocked = tap ? guard(null, Guard.nodeAt(svc.getWindows(), x1, y1)) : guardStroke(null, x1, y1, x2, y2);
         if (blocked != null) return blocked;
         Path p = new Path();
@@ -1677,7 +1719,7 @@ final class Tools {
         p.lineTo(x2, y2);
         long d = Math.max(50, Math.min(3000, a.optLong("duration_ms", 300)));
         String before = beforeAction();
-        boolean ok = gesture(p, d);
+        boolean ok = gesture(p, d, binding);
         return ok ? "Swiped." + afterAction(before, 1000) : "Swipe was cancelled.";
     }
 
@@ -1696,7 +1738,7 @@ final class Tools {
         return off ? "BLOCKED: that's one of Buddy's own screens. Only the user touches those." : null;
     }
 
-    private boolean gesture(Path path, long durationMs) throws InterruptedException {
+    private boolean gesture(Path path, long durationMs, Binding... bindings) throws InterruptedException {
         svc.setBubblePassThrough(true);
         try {
             final CountDownLatch done = new CountDownLatch(1);
@@ -1704,6 +1746,8 @@ final class Tools {
             GestureDescription g = new GestureDescription.Builder()
                     .addStroke(new GestureDescription.StrokeDescription(path, 0, durationMs)).build();
             if (Guard.humanOnly(svc) || svc.paused()) return false; // the user took the phone since this call began
+            for (Binding binding : bindings) if (!binding.valid()) return false;
+            if (!McpServer.callerActive()) return false;
             svc.autoPauser().ownGesture(durationMs); // Buddy's own touch: not the user taking the phone
             boolean dispatched = svc.dispatchGesture(g, new AccessibilityService.GestureResultCallback() {
                 @Override

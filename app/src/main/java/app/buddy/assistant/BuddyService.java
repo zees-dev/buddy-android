@@ -866,6 +866,7 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
             Triggers.approvalDone(this, chat);
         }
         if (cardTouches != touches) rereadNeeded = true; // they used the screen meanwhile: ids may be stale
+        if (McpServer.CALLER_SESSION.get() != null && !McpServer.callerActive()) return "DENIED: request session ended.";
         if (ended != null) {
             main.post(() -> bubble.cancelConfirm(cb));
             return ended;
