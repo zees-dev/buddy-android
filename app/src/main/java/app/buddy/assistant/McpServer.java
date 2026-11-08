@@ -371,8 +371,19 @@ final class McpServer {
     /** Capture request authority before crossing to Android's main thread. */
     static java.util.function.BooleanSupplier executionValid() {
         requireActive();
-        java.util.function.BooleanSupplier valid = CALLER_VALID.get(), gone = CALLER_GONE.get();
-        return () -> valid.getAsBoolean() && (gone == null || !gone.getAsBoolean());
+        return CALLER_VALID.get();
+    }
+
+    /** Socket reads stay on the request worker; abandoned work queued on Android's main thread is canceled. */
+    static <T> T awaitEffect(java.util.concurrent.FutureTask<T> task) throws Exception {
+        try {
+            while (true) {
+                try { return task.get(50, TimeUnit.MILLISECONDS); }
+                catch (java.util.concurrent.TimeoutException e) { requireActive(); }
+            }
+        } finally {
+            task.cancel(false);
+        }
     }
     /** True once the client of the current request (on this thread) has hung up, e.g. its tool call timed out. */
     static final ThreadLocal<java.util.function.BooleanSupplier> CALLER_GONE = new ThreadLocal<>();

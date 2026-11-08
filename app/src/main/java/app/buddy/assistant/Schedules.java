@@ -609,7 +609,7 @@ public final class Schedules extends BroadcastReceiver {
             }
         });
         main.post(t);
-        return t.get();
+        return McpServer.awaitEffect(t);
     }
 
     private static String scheduleMessage(Context c, Sessions.Session s, JSONObject a) {

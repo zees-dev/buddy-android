@@ -367,8 +367,7 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
             return null;
         });
         main.post(task);
-        try { task.get(); }
-        finally { task.cancel(false); }
+        McpServer.awaitEffect(task);
     }
 
     private volatile String settingsActivity;
