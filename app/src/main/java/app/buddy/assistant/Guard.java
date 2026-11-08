@@ -496,7 +496,6 @@ final class Guard {
                 || variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
                 || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)
                 || cls == android.text.InputType.TYPE_CLASS_NUMBER && variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) return true;
-        if (cls == android.text.InputType.TYPE_CLASS_NUMBER || cls == android.text.InputType.TYPE_CLASS_PHONE) return true;
         String hints = n.getText() + " " + n.getHintText() + " " + n.getViewIdResourceName() + " " + n.getContentDescription();
         for (String key : n.getExtras().keySet()) {
             if (!key.toLowerCase(Locale.ROOT).contains("autofill")) continue;
