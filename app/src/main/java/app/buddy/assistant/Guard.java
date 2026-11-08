@@ -498,16 +498,21 @@ final class Guard {
                 || variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
                 || variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)
                 || cls == android.text.InputType.TYPE_CLASS_NUMBER && variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) return true;
+        String hints = inputHints(n);
+        for (CharSequence label : new CharSequence[]{n.getText(), n.getContentDescription(), n.getHintText()})
+            if (label != null && PIN_INDICATOR.matcher(label.toString().trim()).matches()) return true;
+        return SENSITIVE_INPUT.matcher(hints).find() || hints.matches("(?s).*[●•○◦]{3,}.*");
+    }
+
+    static String inputHints(AccessibilityNodeInfo n) {
         String hints = (!n.isEditable() || n.isShowingHintText() ? n.getText() : "") + " "
                 + n.getHintText() + " " + n.getViewIdResourceName() + " " + n.getContentDescription();
-        for (String key : n.getExtras().keySet()) {
+        for (String key : new java.util.TreeSet<>(n.getExtras().keySet())) {
             if (!key.toLowerCase(Locale.ROOT).contains("autofill")) continue;
             Object value = n.getExtras().get(key);
             hints += " " + (value instanceof Object[] ? java.util.Arrays.toString((Object[]) value) : value);
         }
-        for (CharSequence label : new CharSequence[]{n.getText(), n.getContentDescription(), n.getHintText()})
-            if (label != null && PIN_INDICATOR.matcher(label.toString().trim()).matches()) return true;
-        return SENSITIVE_INPUT.matcher(hints).find() || hints.matches("(?s).*[●•○◦]{3,}.*");
+        return hints;
     }
 
     private static final Pattern ORDINARY_INPUT = Pattern.compile(

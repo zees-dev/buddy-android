@@ -1321,8 +1321,12 @@ final class Tools {
         boolean unchanged() {
             return svc.controlRevoked() == null && !svc.paused() && !Guard.humanOnly(svc)
                     && sensitive == Guard.sensitiveDestination(svc) && (!sensitive || needsApproval)
-                    && args.equals(input.toString()) && (!needsApproval || screen != null && screen.equals(screenPrint())
-                    && (target == null || target.refresh() && identity.equals(identity(target, false))));
+                    && args.equals(input.toString()) && (!needsApproval || screen != null && screen.equals(screenPrint()))
+                    && (!(typing || needsApproval) || target == null || target.refresh() && identity.equals(identity(target, false)));
+        }
+
+        void requireValid() {
+            if (!valid()) throw new IllegalStateException(CHANGED);
         }
 
         /** Android restores app focus and its accessibility snapshot after the approval overlay closes. */
@@ -1341,7 +1345,9 @@ final class Tools {
         Rect r = new Rect();
         n.getBoundsInScreen(r);
         return n.getPackageName() + "/" + n.getWindowId() + "/" + n.getViewIdResourceName() + "/" + r
-                + "/" + n.getClassName() + (redact ? " [sensitive window]" : "/" + n.getText() + "/" + n.getContentDescription());
+                + "/" + n.getClassName() + (redact ? " [sensitive window]" : "/" + n.getText() + "/" + n.getContentDescription()
+                + "/" + n.getInputType() + "/" + n.isPassword() + "/" + Guard.inputHints(n)
+                + "/" + (android.os.Build.VERSION.SDK_INT >= 34 && n.isAccessibilityDataSensitive()));
     }
 
     private static final String HUMAN_ONLY = "BLOCKED: installers, permissions, security settings and Buddy controls require the human. Ask the user to do this step.";
@@ -1695,18 +1701,19 @@ final class Tools {
      * False when the field won't paste; the caller then sets the text.
      */
     private boolean paste(AccessibilityNodeInfo target, CharSequence cur, String text, boolean append) {
-        if (action.get() == null || !action.get().valid()) return false;
+        Binding binding = action.get();
+        if (binding == null) return false;
         ClipboardManager cm = svc.getSystemService(ClipboardManager.class);
         if (cm == null) return false;
         int len = cur == null ? 0 : cur.length();
         Bundle sel = new Bundle();
         sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, append ? len : 0);
         sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len);
-        McpServer.requireActive();
+        binding.requireValid();
         target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel);
-        McpServer.requireActive();
+        binding.requireValid();
         cm.setPrimaryClip(ClipData.newPlainText("Buddy", text));
-        McpServer.requireActive();
+        binding.requireValid();
         return target.performAction(AccessibilityNodeInfo.ACTION_PASTE);
     }
 
