@@ -2,7 +2,6 @@ package app.buddy.assistant;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.Looper;
 
 /**
  * Voice input through Claude Code's own /voice (Anthropic's speech-to-text on the user's Claude plan).
@@ -17,7 +16,7 @@ final class ClaudeDictation {
             "en", "es", "fr", "ja", "de", "pt", "it", "ko", "hi", "id", "ru", "pl", "tr", "nl", "uk", "el", "cs", "da", "sv", "no"));
     static final String DIR = "/root/dictation";
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
     private static TermSession session;
     private static String sessionLang;
     private static Voice.Listener listener;
@@ -38,6 +37,7 @@ final class ClaudeDictation {
 
     /** Start listening (the hidden session starts first if needed: a few seconds the first time). */
     static String listen(Context c, String lang, Voice.Listener l) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return c.getString(R.string.exit_stopped);
         if (!SetupState.planSignedIn(c, "claude")) return c.getString(R.string.dictation_claude_sign_in);
         final Context app = c.getApplicationContext();
         listener = l;
@@ -70,6 +70,7 @@ final class ClaudeDictation {
 
     /** Start the hidden session ahead of time (a chat opened), so the first tap on the mic is quick. */
     static void prepare(Context c, String lang) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         if (!SetupState.planSignedIn(c, "claude") || ready(code(lang))) return;
         final Context app = c.getApplicationContext();
         new Thread(() -> {
@@ -78,7 +79,7 @@ final class ClaudeDictation {
                 ensureSession(app, code(lang));
             } catch (Exception ignored) {
             } finally {
-                if (listener == null) MicServer.stop();
+                if (AppLifecycle.currentWork() && listener == null) MicServer.stop();
             }
         }, "claude-dictation-prep").start();
     }
@@ -166,6 +167,14 @@ final class ClaudeDictation {
         if (l != null) l.onEnd(null);
     }
 
+    static void shutdown() {
+        cancel();
+        if (session != null) session.finish();
+        session = null;
+        sessionLang = null;
+        main.removeCallbacksAndMessages(null);
+    }
+
     private static void end(Voice.Listener l, String message) {
         if (listener == l) listener = null;
         holding = false;
@@ -177,6 +186,7 @@ final class ClaudeDictation {
     // ------------------------------------------------------------- the hidden session
 
     private static synchronized void ensureSession(Context c, String lang) throws Exception {
+        AppLifecycle.requireRunning(c);
         if (session != null && !session.exited && lang.equals(sessionLang)) return;
         if (session != null) session.finish();
         session = null;
@@ -190,18 +200,27 @@ final class ClaudeDictation {
                 + " echo '{\"language\": \"" + lang + "\", \"voiceEnabled\": true}' > " + DIR + "/.claude/settings.json; echo PREP_OK", 120);
         if (!out.contains("PREP_OK")) throw new Exception(out.trim());
         // stderr off the screen: the sound library's complaints would otherwise be read back as the words
-        session = TermSession.startHidden(c, 30, 100, "cd " + DIR + " && exec claude 2>>/tmp/dictation.err");
-        sessionLang = lang;
+        TermSession created = TermSession.startHidden(c, 30, 100, "cd " + DIR + " && exec claude 2>>/tmp/dictation.err");
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork() || Prefs.exited(c)) {
+                created.finish();
+                throw new java.io.IOException(c.getString(R.string.exit_stopped));
+            }
+            session = created;
+            sessionLang = lang;
+        }
         // wait for the prompt, then switch voice mode on (hold to talk)
         long until = System.currentTimeMillis() + 30_000;
-        while (System.currentTimeMillis() < until && !session.exited && !session.emulator.screenText().contains("❯")) {
+        while (System.currentTimeMillis() < until && AppLifecycle.currentWork()
+                && !created.exited && !created.emulator.screenText().contains("❯")) {
             Thread.sleep(300);
         }
-        if (session.exited || !session.emulator.screenText().contains("❯")) throw new Exception(c.getString(R.string.dictation_claude_code_no_start));
+        AppLifecycle.requireRunning(c);
+        if (created.exited || !created.emulator.screenText().contains("❯")) throw new Exception(c.getString(R.string.dictation_claude_code_no_start));
         Thread.sleep(400);
-        session.write("/voice hold\r");
+        created.write("/voice hold\r");
         Thread.sleep(1500);
-        clearPrompt();
+        main.post(ClaudeDictation::clearPrompt);
     }
 
     /** Hold space: Claude Code's push-to-talk works from key repeat, so keep pressing it while the user talks. */

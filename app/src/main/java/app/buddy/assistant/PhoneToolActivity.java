@@ -52,6 +52,10 @@ public class PhoneToolActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        if (Prefs.exited(this)) {
+            finish(null);
+            return;
+        }
         String job = getIntent().getStringExtra("job");
         if (state != null) return; // recreated: the first one already started its job
         if (PHOTO.equals(job)) {

@@ -30,10 +30,11 @@ final class CodexDictation {
             + "elsewhere, not talking to you. Never answer, never ask questions, never hand anything off or start "
             + "tasks. Stay silent.";
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
-    private static Process server;
+    private static final Handler main = AppLifecycle.workHandler();
+    private static final Object startup = new Object();
+    private static volatile Process server;
     private static OutputStream toServer;
-    private static String threadId;
+    private static volatile String threadId;
     private static int nextId;
     private static final Map<Integer, JSONObject[]> replies = new HashMap<>();
 
@@ -56,6 +57,7 @@ final class CodexDictation {
     // ------------------------------------------------------------------ listening
 
     static String listen(Context c, Voice.Listener l) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return c.getString(R.string.exit_stopped);
         if (!SetupState.planSignedIn(c, "codex")) return c.getString(R.string.dictation_codex_sign_in);
         final Context app = c.getApplicationContext();
         listener = l;
@@ -174,11 +176,16 @@ final class CodexDictation {
             }
         });
         final WebView mine = web;
+        // WebView bridge threads are Android-owned; the page identity owns admission to this runtime.
+        final Handler pageMain = new Handler(Looper.getMainLooper());
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void offer(String sdp) {
-                stage = R.string.dictation_stage_codex;
-                new Thread(() -> startCall(mine, sdp), "codex-dictation-call").start();
+                pageMain.post(() -> {
+                    if (web != mine) return;
+                    stage = R.string.dictation_stage_codex;
+                    new Thread(() -> startCall(mine, sdp), "codex-dictation-call").start();
+                });
             }
 
             /** The next bit of recorded audio (16-bit mono, 16 kHz) as base64; "" when there's none yet. */
@@ -192,21 +199,22 @@ final class CodexDictation {
             /** The page has played everything it was given. */
             @JavascriptInterface
             public void idle() {
-                if (!MicServer.recording() && MicServer.pull(2).length == 0) main.post(() -> {
+                if (web != mine) return;
+                if (!MicServer.recording() && MicServer.pull(2).length == 0) pageMain.post(() -> {
                     if (web == mine) drained = true;
                 });
             }
 
             @JavascriptInterface
             public void connected() {
-                main.post(() -> {
+                pageMain.post(() -> {
                     if (web == mine) connected = true;
                 });
             }
 
             @JavascriptInterface
             public void failed(String why) {
-                main.post(() -> {
+                pageMain.post(() -> {
                     // the page's own 'the connection failed' (see PAGE) in the user's language; other reasons come from the WebView
                     if (web == mine && listener != null) end(listener, BuddyApp.str(R.string.dictation_chatgpt_error,
                             "the connection failed".equals(why) ? BuddyApp.str(R.string.dictation_connection_failed) : why));
@@ -219,9 +227,13 @@ final class CodexDictation {
     /** Hand the page's offer to Codex, which places the call with ChatGPT; the answer comes back as a notification. */
     private static void startCall(WebView page, String sdp) {
         try {
-            for (int i = 0; i < 600 && threadId == null; i++) Thread.sleep(100); // the server is still starting
+            for (int i = 0; i < 600 && threadId == null; i++) {
+                if (!AppLifecycle.currentWork()) return;
+                Thread.sleep(100); // the server is still starting
+            }
+            if (!AppLifecycle.currentWork()) return;
             if (threadId == null) throw new Exception(BuddyApp.str(R.string.dictation_codex_no_start));
-            stage = R.string.dictation_stage_call;
+            AppLifecycle.publish(() -> stage = R.string.dictation_stage_call);
             JSONObject r = request("thread/realtime/start", new JSONObject()
                     .put("threadId", threadId)
                     .put("transport", new JSONObject().put("type", "webrtc").put("sdp", sdp))
@@ -231,7 +243,8 @@ final class CodexDictation {
                     .put("prompt", PROMPT)
                     .put("includeStartupContext", false), 30_000);
             if (r.has("error")) throw new Exception(r.getJSONObject("error").optString("message"));
-            stage = R.string.dictation_stage_answer;
+            if (!AppLifecycle.currentWork()) return;
+            AppLifecycle.publish(() -> stage = R.string.dictation_stage_answer);
         } catch (Exception e) {
             main.post(() -> {
                 if (web == page && listener != null) end(listener, BuddyApp.str(R.string.dictation_chatgpt_start_failed, e.getMessage()));
@@ -245,25 +258,75 @@ final class CodexDictation {
 
     // ------------------------------------------------------------------ Codex's app server
 
-    static synchronized void ensureServer(Context c) throws Exception {
-        if (server != null && server.isAlive() && threadId != null) return;
-        if (server != null) server.destroy();
-        threadId = null;
-        appContext = c.getApplicationContext();
-        // Buddy's phone tools are only given to chats (on their command line), never here; no app connectors either
-        Linux.exec(c, "mkdir -p " + DIR, 30);
-        Process p = Linux.builder(c, "/bin/sh", "-c", "cd " + DIR + " && exec /root/bin/buddy-codex app-server -c features.apps=false 2>" + DIR + "/server.log").start();
-        server = p;
-        toServer = p.getOutputStream();
-        Thread reader = new Thread(() -> read(p), "codex-dictation-server");
-        reader.setDaemon(true);
-        reader.start();
-        JSONObject init = request("initialize", new JSONObject()
-                .put("clientInfo", new JSONObject().put("name", "buddy").put("version", BuildInfo.VERSION))
-                .put("capabilities", new JSONObject().put("experimentalApi", true)), 60_000);
-        if (init.has("error")) throw new Exception(init.getJSONObject("error").optString("message"));
-        send(new JSONObject().put("method", "initialized"));
-        threadId = newThread();
+    static void ensureServer(Context c) throws Exception {
+        synchronized (startup) {
+            synchronized (CodexDictation.class) {
+                AppLifecycle.requireRunning(c);
+                if (server != null && server.isAlive() && threadId != null) return;
+                if (server != null) server.destroy();
+                AppLifecycle.publish(() -> {
+                    threadId = null;
+                    appContext = c.getApplicationContext();
+                });
+            }
+            // Buddy's phone tools are only given to chats (on their command line), never here; no app connectors either
+            Linux.exec(c, "mkdir -p " + DIR, 30);
+            Process p = Linux.builder(c, "/bin/sh", "-c", "cd " + DIR + " && exec /root/bin/buddy-codex app-server -c features.apps=false 2>" + DIR + "/server.log").start();
+            synchronized (CodexDictation.class) {
+                if (!AppLifecycle.currentWork()) {
+                    p.destroy();
+                    return;
+                }
+                OutputStream output = p.getOutputStream();
+                AppLifecycle.publish(() -> { server = p; toServer = output; });
+                if (!AppLifecycle.currentWork()) { p.destroy(); return; }
+            }
+            Thread reader = new Thread(() -> read(p), "codex-dictation-server");
+            reader.setDaemon(true);
+            reader.start();
+            JSONObject init = request("initialize", new JSONObject()
+                    .put("clientInfo", new JSONObject().put("name", "buddy").put("version", BuildInfo.VERSION))
+                    .put("capabilities", new JSONObject().put("experimentalApi", true)), 60_000);
+            if (init.has("error")) throw new Exception(init.getJSONObject("error").optString("message"));
+            send(new JSONObject().put("method", "initialized"));
+            String id = newThread();
+            synchronized (CodexDictation.class) {
+                AppLifecycle.publish(() -> threadId = id);
+            }
+        }
+    }
+
+    /** Native children are already stopped; WebView cancellation stays on the main thread. */
+    static void shutdown() {
+        if (!AppLifecycle.currentWork()) return;
+        main.removeCallbacksAndMessages(null);
+        synchronized (CodexDictation.class) {
+            Process p = server;
+            OutputStream stream = toServer;
+            server = null;
+            toServer = null;
+            threadId = null;
+            reviewModel = null;
+            if (stream != null) {
+                try {
+                    stream.close();
+                } catch (java.io.IOException ignored) {
+                }
+            }
+            if (p != null) p.destroy();
+        }
+        synchronized (replies) {
+            for (JSONObject[] slot : replies.values()) synchronized (slot) {
+                slot[0] = DIED;
+                slot.notifyAll();
+            }
+            replies.clear();
+        }
+        for (StringBuilder review : reviews.values()) synchronized (review) {
+            review.append('\u0000');
+            review.notifyAll();
+        }
+        reviews.clear();
     }
 
     private static final Map<String, StringBuilder> reviews = new java.util.concurrent.ConcurrentHashMap<>();
@@ -285,7 +348,9 @@ final class CodexDictation {
                 }
             } catch (Exception ignored) {
             }
-            reviewModel = pick;
+            AppLifecycle.requireRunning(c);
+            final String chosenModel = pick;
+            AppLifecycle.publish(() -> reviewModel = chosenModel);
         }
         JSONObject ts = new JSONObject().put("ephemeral", true).put("cwd", DIR).put("sandbox", "read-only")
                 .put("approvalPolicy", "never").put("baseInstructions", system);
@@ -296,19 +361,20 @@ final class CodexDictation {
         if (t.has("error")) throw new Exception(t.getJSONObject("error").optString("message"));
         String tid = t.getJSONObject("result").getJSONObject("thread").getString("id");
         StringBuilder out = new StringBuilder();
-        reviews.put(tid, out);
+        AppLifecycle.publish(() -> reviews.put(tid, out));
         try {
             JSONObject r = request("turn/start", new JSONObject().put("threadId", tid).put("effort", "low")
                     .put("input", new org.json.JSONArray().put(new JSONObject().put("type", "text").put("text", prompt))), 30_000);
             if (r.has("error")) throw new Exception(r.getJSONObject("error").optString("message"));
             long until = System.currentTimeMillis() + timeoutMs;
             synchronized (out) {
-                while (out.indexOf("\u0000") < 0 && System.currentTimeMillis() < until) out.wait(200);
+                while (AppLifecycle.currentWork() && out.indexOf("\u0000") < 0 && System.currentTimeMillis() < until) out.wait(200);
             }
+            AppLifecycle.requireRunning(c);
             if (out.indexOf("\u0000") < 0) throw new Exception(c.getString(R.string.reviewer_timed_out)); // shown on the card
             return out.toString().replace("\u0000", "");
         } finally {
-            reviews.remove(tid);
+            reviews.remove(tid, out);
         }
     }
 
@@ -331,6 +397,7 @@ final class CodexDictation {
 
     /** Start Codex ahead of time (a chat opened) so the first tap on the mic is quick. */
     static void prepare(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         if (!SetupState.planSignedIn(c, "codex") || (server != null && server.isAlive() && threadId != null)) return;
         final Context app = c.getApplicationContext();
         new Thread(() -> {
@@ -345,6 +412,7 @@ final class CodexDictation {
         try (BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = in.readLine()) != null) {
+                if (!AppLifecycle.currentWork()) return;
                 JSONObject m;
                 try {
                     m = new JSONObject(line);
@@ -369,13 +437,15 @@ final class CodexDictation {
             }
         } catch (Exception ignored) {
         }
-        if (server == p) {
-            server = null;
-            threadId = null;
+        synchronized (CodexDictation.class) {
+            if (AppLifecycle.currentWork() && server == p) {
+                AppLifecycle.publish(() -> { server = null; toServer = null; threadId = null; });
+            }
         }
     }
 
     private static void notification(String method, JSONObject p) throws Exception {
+        if (!AppLifecycle.currentWork()) return;
         if (p == null) return;
         StringBuilder review = reviews.get(p.optString("threadId"));
         if (review != null) { // a reviewer's own turn: collect its answer (and don't interrupt it)
@@ -405,7 +475,7 @@ final class CodexDictation {
                 break;
             }
             case "thread/realtime/sdp": {
-                stage = R.string.dictation_stage_connecting;
+                AppLifecycle.publish(() -> stage = R.string.dictation_stage_connecting);
                 final String sdp = p.optString("sdp");
                 main.post(() -> js("answer(" + JSONObject.quote(sdp) + ")"));
                 break;
@@ -448,6 +518,8 @@ final class CodexDictation {
     private static void send(JSONObject m) throws Exception {
         byte[] b = (m.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         synchronized (CodexDictation.class) {
+            AppLifecycle.requireRunning(appContext);
+            if (toServer == null) throw new IllegalStateException("Codex dictation is stopped");
             toServer.write(b);
             toServer.flush();
         }
@@ -467,17 +539,19 @@ final class CodexDictation {
     }
 
     static JSONObject request(String method, JSONObject params, long timeoutMs) throws Exception {
+        AppLifecycle.requireRunning(appContext);
         int id;
         JSONObject[] slot = new JSONObject[1];
         synchronized (replies) {
             id = ++nextId;
-            replies.put(id, slot);
+            AppLifecycle.publish(() -> replies.put(id, slot));
         }
         try {
             send(new JSONObject().put("id", id).put("method", method).put("params", params));
             synchronized (slot) {
                 long until = System.currentTimeMillis() + timeoutMs;
                 while (slot[0] == null && System.currentTimeMillis() < until) {
+                    AppLifecycle.requireRunning(appContext);
                     slot.wait(Math.max(1, Math.min(300, until - System.currentTimeMillis())));
                     Process p = server;
                     if (slot[0] == null && (p == null || !p.isAlive())) slot[0] = DIED;
@@ -486,10 +560,11 @@ final class CodexDictation {
             // the messages reach the user (ChatGPT voice errors, the reviewer's card)
             if (slot[0] == null) throw new Exception(BuddyApp.str(R.string.dictation_request_timed_out, method));
             if (slot[0] == DIED) throw new Exception(BuddyApp.str(R.string.dictation_codex_stopped, serverLog()));
+            AppLifecycle.requireRunning(appContext);
             return slot[0];
         } finally {
             synchronized (replies) {
-                replies.remove(id);
+                replies.remove(id, slot);
             }
         }
     }

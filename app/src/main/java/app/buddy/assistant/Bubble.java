@@ -182,6 +182,14 @@ final class Bubble implements ChatHub.Listener {
     }
 
     void remove() {
+        pendingConfirm = null;
+        queued.clear();
+        countdownEnd = 0;
+        root.removeCallbacks(countdownTick);
+        root.removeCallbacks(lateFit);
+        root.removeCallbacks(keyboardLate);
+        root.removeCallbacks(outsideCollapse);
+        if (radial != null) radial.close(false);
         if (arcs != null) {
             try {
                 wm.removeView(arcs);
@@ -204,6 +212,7 @@ final class Bubble implements ChatHub.Listener {
             }
         }
         if (breathing != null) breathing.cancel();
+        if (face != null && face.getParent() instanceof View) ((View) face.getParent()).animate().cancel();
         try {
             wm.removeView(root);
         } catch (Exception ignored) {
@@ -1408,7 +1417,7 @@ final class Bubble implements ChatHub.Listener {
         if (expanded || Prefs.menuHinted(svc) || Prefs.peekCount(svc) >= 3 || radial.isOpen() || root.getVisibility() != View.VISIBLE) return;
         Prefs.addPeek(svc);
         face.postDelayed(() -> {
-            if (expanded || radial.isOpen()) return;
+            if (!root.isAttachedToWindow() || expanded || radial.isOpen()) return;
             int[] loc = new int[2];
             face.getLocationOnScreen(loc);
             int cx = loc[0] + face.getWidth() / 2, cy = loc[1] + face.getHeight() / 2;

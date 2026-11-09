@@ -36,6 +36,7 @@ final class KeepAwake {
     }
 
     private boolean wanted() {
+        if (Prefs.exited(svc)) return false;
         if (svc.paused() || svc.controlRevoked() != null || Triggers.locked(svc)) return false;
         for (Sessions.Session s : ChatHub.get(svc).sessions.all) if (s.running && s.awake) return true;
         return false;

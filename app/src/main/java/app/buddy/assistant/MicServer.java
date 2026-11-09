@@ -50,44 +50,55 @@ final class MicServer {
     private static Host host;
     private static String token;
     private static volatile int active;
+    private static final java.util.Set<Socket> clients = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private MicServer() {
     }
 
     /** Start accepting (Terminal visible). Writes a fresh token where the stand-in recorder reads it. */
     static synchronized void start(Context c, Host h) {
-        host = h;
-        if (server != null) return;
-        try {
-            byte[] b = new byte[16];
-            new SecureRandom().nextBytes(b);
-            StringBuilder sb = new StringBuilder();
-            for (byte x : b) sb.append(String.format("%02x", x));
-            token = sb.toString();
-            File f = new File(Linux.root(c), "root/.buddy/mic-token");
-            f.getParentFile().mkdirs();
-            try (FileOutputStream o = new FileOutputStream(f)) {
-                o.write((token + "\n").getBytes(StandardCharsets.UTF_8));
-            }
-            server = new ServerSocket(PORT, 4, InetAddress.getByName("127.0.0.1"));
-        } catch (IOException e) {
-            server = null;
-            return;
-        }
-        final ServerSocket s = server;
-        final Context app = c.getApplicationContext();
-        Thread t = new Thread(() -> {
-            while (!s.isClosed()) {
-                try {
-                    Socket sock = s.accept();
-                    new Thread(() -> serve(app, sock), "mic-client").start();
-                } catch (IOException e) {
-                    break;
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
+            host = h;
+            if (server != null) return;
+            try {
+                byte[] b = new byte[16];
+                new SecureRandom().nextBytes(b);
+                StringBuilder sb = new StringBuilder();
+                for (byte x : b) sb.append(String.format("%02x", x));
+                token = sb.toString();
+                File f = new File(Linux.root(c), "root/.buddy/mic-token");
+                f.getParentFile().mkdirs();
+                try (FileOutputStream o = new FileOutputStream(f)) {
+                    o.write((token + "\n").getBytes(StandardCharsets.UTF_8));
                 }
+                server = new ServerSocket(PORT, 4, InetAddress.getByName("127.0.0.1"));
+            } catch (IOException e) {
+                server = null;
+                return;
             }
-        }, "mic-server");
-        t.setDaemon(true);
-        t.start();
+            final ServerSocket s = server;
+            final Context app = c.getApplicationContext();
+            Thread t = new Thread(() -> {
+                while (!s.isClosed()) {
+                    try {
+                        Socket sock = s.accept();
+                        synchronized (MicServer.class) {
+                            if (s != server) {
+                                sock.close();
+                                break;
+                            }
+                            clients.add(sock);
+                        }
+                        new Thread(() -> serve(app, sock), "mic-client").start();
+                    } catch (IOException e) {
+                        break;
+                    }
+                }
+            }, "mic-server");
+            t.setDaemon(true);
+            t.start();
+        }
     }
 
     /** Stop accepting and end any recording (Terminal left the screen). */
@@ -100,10 +111,13 @@ final class MicServer {
             }
             server = null;
         }
+        for (Socket s : clients) try { s.close(); } catch (IOException ignored) { }
+        active = 0;
     }
 
     /** Start recording now (the user tapped the mic). False if the microphone isn't available. */
     static boolean startCapture(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return false;
         endCapture();
         if (c.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false;
         int rate = 16000, ch = AudioFormat.CHANNEL_IN_MONO;
@@ -128,19 +142,21 @@ final class MicServer {
         recording = true;
         Thread t = new Thread(() -> {
             byte[] buf = new byte[1280]; // 40 ms
-            while (recording) {
+            while (recording && AppLifecycle.currentWork()) {
                 int n = r.read(buf, 0, buf.length);
                 if (n < 0) break;
                 if (n == 0) continue;
                 byte[] chunk = java.util.Arrays.copyOf(buf, n);
-                synchronized (chunks) {
-                    chunks.add(chunk);
-                    chunks.notifyAll();
-                }
+                AppLifecycle.publish(() -> {
+                    synchronized (chunks) {
+                        chunks.add(chunk);
+                        chunks.notifyAll();
+                    }
+                });
                 Levels lv = levels;
                 if (lv != null) lv.onLevel(loudness(chunk, n));
             }
-            recording = false;
+            AppLifecycle.publish(() -> recording = false);
             try {
                 r.stop();
             } catch (Exception ignored) {
@@ -198,7 +214,7 @@ final class MicServer {
     private static void streamCapture(OutputStream out) throws IOException, InterruptedException {
         int i = 0;
         byte[] silence = new byte[1280];
-        while (server != null && captureOn) {
+        while (server != null && captureOn && AppLifecycle.currentWork()) {
             byte[] next = null;
             boolean live;
             synchronized (chunks) {
@@ -212,7 +228,7 @@ final class MicServer {
             if (next != null) {
                 out.write(next);
             } else {
-                drained = true;
+                AppLifecycle.publish(() -> drained = true);
                 out.write(silence);
                 Thread.sleep(40);
             }
@@ -225,6 +241,7 @@ final class MicServer {
             s.setTcpNoDelay(true);
             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             String first = in.readLine(); // "<token> <rate> <channels>"
+            if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
             String[] p = first == null ? new String[0] : first.trim().split("\\s+");
             if (p.length < 1 || !p[0].equals(token)) return;
             int rate = p.length > 1 ? Integer.parseInt(p[1]) : 16000;
@@ -243,11 +260,14 @@ final class MicServer {
             rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, rate, chMask,
                     AudioFormat.ENCODING_PCM_16BIT, Math.max(min, rate)); // ~0.5 s of buffer
             if (rec.getState() != AudioRecord.STATE_INITIALIZED) return;
-            rec.startRecording();
+            synchronized (AppLifecycle.class) {
+                if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
+                rec.startRecording();
+            }
             listening(+1);
             OutputStream out = s.getOutputStream();
             byte[] buf = new byte[Math.max(min, 3200)];
-            while (server != null) {
+            while (server != null && AppLifecycle.currentWork()) {
                 int n = rec.read(buf, 0, buf.length);
                 if (n < 0) break;
                 if (n > 0) {
@@ -258,6 +278,7 @@ final class MicServer {
             }
         } catch (Exception ignored) {
         } finally {
+            clients.remove(sock);
             if (rec != null) {
                 try {
                     rec.stop();
@@ -283,10 +304,13 @@ final class MicServer {
     }
 
     private static void listening(int d) {
-        boolean was = active > 0;
-        active += d;
-        boolean now = active > 0;
-        Host h = host;
-        if (h != null && was != now) h.onListening(now);
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            boolean was = active > 0;
+            active += d;
+            boolean now = active > 0;
+            Host h = host;
+            if (h != null && was != now) h.onListening(now);
+        }
     }
 }

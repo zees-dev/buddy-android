@@ -25,6 +25,10 @@ public final class ShareActivity extends Screen {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        if (!AppLifecycle.reopen(this)) {
+            finish();
+            return;
+        }
         hub = ChatHub.get(this);
         if (!SetupState.signedIn(this, Prefs.backend(this))) { // not set up yet: the main screen leads the way
             startActivity(new Intent(this, MainActivity.class));
@@ -92,10 +96,12 @@ public final class ShareActivity extends Screen {
         Intent in = getIntent();
         List<Uri> uris = uris(in);
         String text = text(in);
+        android.os.Handler main = AppLifecycle.workHandler();
         new Thread(() -> {
             ArrayList<String> files = new ArrayList<>();
             String err = null;
             for (Uri u : uris) {
+                if (!AppLifecycle.currentWork() || Prefs.exited(this)) return;
                 try {
                     files.add(Attachments.importUri(this, u));
                 } catch (Exception e) {
@@ -103,7 +109,7 @@ public final class ShareActivity extends Screen {
                 }
             }
             final String error = err;
-            runOnUiThread(() -> {
+            main.post(() -> {
                 if (error != null) Toast.makeText(this, error, Toast.LENGTH_LONG).show();
                 hub.select(ses);
                 // in Buddy's own task, not the sharing app's

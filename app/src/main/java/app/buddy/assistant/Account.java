@@ -3,7 +3,6 @@ package app.buddy.assistant;
 import android.content.Context;
 import android.net.Uri;
 import android.os.Handler;
-import android.os.Looper;
 
 import org.json.JSONObject;
 
@@ -82,7 +81,7 @@ final class Account {
     /** A failed install's own output, behind Details when detail says it in plain words ("" otherwise). */
     volatile String errorDetail = "";
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
     private static volatile Context app;
     private static final List<Listener> listeners = new ArrayList<>();
     private Process login;
@@ -138,16 +137,18 @@ final class Account {
     }
 
     private void set(Step s, String d) {
-        step = s;
-        detail = d == null ? "" : d;
-        Context a = app;
-        // remembered, so screens can show progress right away before the next check finishes
-        if (a != null && (s == Step.NEED_INSTALL || s == Step.SIGNED_OUT || s == Step.SIGNED_IN)) {
-            Prefs.setAgentState(a, agent, s.name());
-            if (s == Step.SIGNED_IN) Prefs.setAgentPlan(a, agent, planIn);
-        }
-        main.post(() -> {
-            for (Listener l : new ArrayList<>(listeners)) l.onAccountChanged();
+        AppLifecycle.publish(() -> {
+            step = s;
+            detail = d == null ? "" : d;
+            Context a = app;
+            // remembered, so screens can show progress right away before the next check finishes
+            if (a != null && (s == Step.NEED_INSTALL || s == Step.SIGNED_OUT || s == Step.SIGNED_IN)) {
+                Prefs.setAgentState(a, agent, s.name());
+                if (s == Step.SIGNED_IN) Prefs.setAgentPlan(a, agent, planIn);
+            }
+            main.post(() -> {
+                for (Listener l : new ArrayList<>(listeners)) l.onAccountChanged();
+            });
         });
     }
 
@@ -161,10 +162,12 @@ final class Account {
 
     /** Works out where things stand: installed? signed in? */
     void refresh(Context c) {
-        app = c.getApplicationContext();
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
+        AppLifecycle.publish(() -> app = c.getApplicationContext());
         if (busy()) return;
         final Context app = c.getApplicationContext();
         new Thread(() -> {
+            if (!AppLifecycle.currentWork()) return;
             try {
                 if (!Linux.installed(app)) {
                     set(Step.NEED_INSTALL, "");
@@ -173,11 +176,12 @@ final class Account {
                 if (claude()) {
                     String out = Linux.exec(app, "[ -x /root/.local/bin/claude ] || { echo NOTINSTALLED; exit 0; }; "
                             + "claude auth status 2>/dev/null; echo; echo VER=$(claude --version 2>/dev/null)", 60);
+                    if (!AppLifecycle.currentWork()) return;
                     if (out.contains("NOTINSTALLED")) {
                         set(Step.NEED_INSTALL, "");
                         return;
                     }
-                    version = ver(out);
+                    AppLifecycle.publish(() -> version = ver(out));
                     int from = out.indexOf('{'), to = out.lastIndexOf('}');
                     if (from < 0 || to < from) { // no status: a slow phone hit the timeout, or claude failed
                         if (out.contains("[timed out")) throw new Exception("it took too long, please try again.");
@@ -186,11 +190,15 @@ final class Account {
                     }
                     JSONObject j = new JSONObject(out.substring(from, to + 1));
                     // signed in = the plan, or an API key service it can use (or both)
-                    planIn = j.optBoolean("loggedIn") && !"api_key".equals(j.optString("authMethod"));
-                    apiKey = !Providers.forAgent(agent).isEmpty();
+                    AppLifecycle.publish(() -> {
+                        planIn = j.optBoolean("loggedIn") && !"api_key".equals(j.optString("authMethod"));
+                        apiKey = !Providers.forAgent(agent).isEmpty();
+                    });
                     if (planIn || apiKey || j.optBoolean("loggedIn")) {
-                        email = planIn ? j.optString("email", j.optString("emailAddress", "")) : "";
-                        plan = planIn || !apiKey ? j.optString("subscriptionType", "") : keyPlan();
+                        AppLifecycle.publish(() -> {
+                            email = planIn ? j.optString("email", j.optString("emailAddress", "")) : "";
+                            plan = planIn || !apiKey ? j.optString("subscriptionType", "") : keyPlan();
+                        });
                         set(Step.SIGNED_IN, "");
                     } else {
                         set(Step.SIGNED_OUT, "");
@@ -203,51 +211,63 @@ final class Account {
                             + "timeout 45 opencode auth list --standalone --format json 2>/dev/null | jq -r '[.[].name] | join(\", \")'; "
                             + "else jq -r 'keys | join(\", \")' /root/.local/share/opencode/auth.json 2>/dev/null; fi; echo OC_OK; "
                             + "echo VER=$(timeout 45 opencode --version 2>/dev/null)", 120);
+                    if (!AppLifecycle.currentWork()) return;
                     if (out.contains("NOTINSTALLED")) {
                         set(Step.NEED_INSTALL, "");
                     } else {
-                        opencode2 = out.contains("OC_V2");
-                        version = ver(out);
+                        AppLifecycle.publish(() -> {
+                            opencode2 = out.contains("OC_V2");
+                            version = ver(out);
+                        });
                         // a slow phone may hit the timeout before OC_OK (issue #9): installed still means ready
                         int ok = out.indexOf("OC_OK");
                         String providers = ok < 0 ? "" : out.substring(0, ok).replace("OC_V2", "").trim();
-                        email = "";
-                        plan = providers.isEmpty() ? "free models" : providers;
+                        AppLifecycle.publish(() -> {
+                            email = "";
+                            plan = providers.isEmpty() ? "free models" : providers;
+                        });
                         set(Step.SIGNED_IN, "");
                         // its model list (free ones plus connected providers), for the model picker
                         String list = Linux.exec(app, "timeout 60 opencode models" + (opencode2 ? " --standalone" : "")
                                 + " 2>/dev/null", 70);
+                        if (!AppLifecycle.currentWork()) return;
                         org.json.JSONArray a = new org.json.JSONArray();
                         for (String line : list.split("\n")) {
                             String m = line.trim();
                             if (m.matches("[A-Za-z0-9._-]+/\\S+")) a.put(new org.json.JSONArray().put(m).put(m.substring(m.indexOf('/') + 1)));
                         }
                         if (a.length() > 0) {
-                            Prefs.setOpencodeModels(app, a.toString());
-                            Models.setOpencode(a.toString());
+                            AppLifecycle.publish(() -> {
+                                Prefs.setOpencodeModels(app, a.toString());
+                                Models.setOpencode(a.toString());
+                            });
                         }
                     }
                 } else if (agy()) {
                     // signed in = its saved Google login (a file: Buddy's Linux has no keyring)
                     String out = Linux.exec(app, "[ -x " + AGY_BIN + " ] || { echo NOTINSTALLED; exit 0; }; "
                             + "[ -s " + AGY_TOKEN + " ] && echo AGY_SIGNED; echo VER=$(" + AGY_BIN + " --version 2>/dev/null)", 60);
-                    version = ver(out);
+                    if (!AppLifecycle.currentWork()) return;
+                    AppLifecycle.publish(() -> version = ver(out));
                     if (out.contains("NOTINSTALLED")) {
                         set(Step.NEED_INSTALL, "");
                     } else if (out.contains("AGY_SIGNED")) {
-                        email = "";
-                        plan = "";
+                        AppLifecycle.publish(() -> {
+                            email = "";
+                            plan = "";
+                        });
                         set(Step.SIGNED_IN, "");
                         // its model list (depends on the plan), for the model picker: one lookup at a time, at most
                         // every 10 minutes (each screen refreshes the account; the helper's ping also updates it)
                         long now = System.currentTimeMillis();
                         if (agyModelsBusy || now - agyModelsAt < 600_000) return;
-                        agyModelsBusy = true;
+                        AppLifecycle.publish(() -> agyModelsBusy = true);
                         String list;
                         try {
                             list = Linux.exec(app, "timeout 40 " + AGY_BIN + " models 2>/dev/null", 50);
+                            if (!AppLifecycle.currentWork()) return;
                         } finally {
-                            agyModelsBusy = false;
+                            AppLifecycle.publish(() -> agyModelsBusy = false);
                         }
                         org.json.JSONArray a = new org.json.JSONArray();
                         for (String line : list.split("\n")) {
@@ -255,9 +275,11 @@ final class Account {
                             if (f.length == 2 && f[0].matches("[A-Za-z0-9._-]+")) a.put(new org.json.JSONArray().put(f[0]).put(f[1].trim()));
                         }
                         if (a.length() > 0) {
-                            agyModelsAt = now;
-                            Prefs.setAgyModels(app, a.toString());
-                            Models.setAgy(a.toString());
+                            AppLifecycle.publish(() -> {
+                                agyModelsAt = now;
+                                Prefs.setAgyModels(app, a.toString());
+                                Models.setAgy(a.toString());
+                            });
                         }
                     } else {
                         set(Step.SIGNED_OUT, "");
@@ -267,24 +289,28 @@ final class Account {
                     String out = Linux.exec(app, "[ -x " + GROK_BIN + " ] || { echo NOTINSTALLED; exit 0; }; "
                             + "[ -s " + GROK_AUTH + " ] && echo GROK_SIGNED=$(jq -r '[.[].email // empty] | first // empty' "
                             + GROK_AUTH + " 2>/dev/null); echo VER=$(" + GROK_BIN + " --version 2>/dev/null)", 60);
-                    version = ver(out);
+                    if (!AppLifecycle.currentWork()) return;
+                    AppLifecycle.publish(() -> version = ver(out));
                     Matcher signed = Pattern.compile("GROK_SIGNED=(\\S*)").matcher(out);
                     if (out.contains("NOTINSTALLED")) {
                         set(Step.NEED_INSTALL, "");
                     } else if (signed.find()) {
-                        email = signed.group(1);
-                        plan = "";
+                        AppLifecycle.publish(() -> {
+                            email = signed.group(1);
+                            plan = "";
+                        });
                         set(Step.SIGNED_IN, "");
                         // its model list ("  * grok-4.7 (default)" lines), for the model picker: as for Antigravity's,
                         // one lookup at a time, at most every 10 minutes
                         long now = System.currentTimeMillis();
                         if (grokModelsBusy || now - grokModelsAt < 600_000) return;
-                        grokModelsBusy = true;
+                        AppLifecycle.publish(() -> grokModelsBusy = true);
                         String list;
                         try {
                             list = Linux.exec(app, "timeout 40 " + GROK_BIN + " models 2>/dev/null", 50);
+                            if (!AppLifecycle.currentWork()) return;
                         } finally {
-                            grokModelsBusy = false;
+                            AppLifecycle.publish(() -> grokModelsBusy = false);
                         }
                         org.json.JSONArray a = new org.json.JSONArray();
                         for (String line : list.split("\n")) {
@@ -292,9 +318,11 @@ final class Account {
                             if (m.find()) a.put(new org.json.JSONArray().put(m.group(1)).put(m.group(1)));
                         }
                         if (a.length() > 0) {
-                            grokModelsAt = now;
-                            Prefs.setGrokModels(app, a.toString());
-                            Models.setGrok(a.toString());
+                            AppLifecycle.publish(() -> {
+                                grokModelsAt = now;
+                                Prefs.setGrokModels(app, a.toString());
+                                Models.setGrok(a.toString());
+                            });
                         }
                     } else {
                         set(Step.SIGNED_OUT, "");
@@ -304,19 +332,24 @@ final class Account {
                     String out = Linux.exec(app, "command -v codex >/dev/null || [ -d /opt/buddy-codex-0.167.0 ] || { echo NOTINSTALLED; exit 0; }; "
                             + "sh /root/bin/install-codex.sh --ensure || exit 1; "
                             + "/root/bin/buddy-codex login status 2>&1; echo VER=$(/root/bin/buddy-codex --version 2>/dev/null)", 900);
+                    if (!AppLifecycle.currentWork()) return;
                     if (!out.contains("VER=codex-cli" ) && !out.contains("NOTINSTALLED")) throw new IOException("Codex verification failed");
-                    version = ver(out);
+                    AppLifecycle.publish(() -> version = ver(out));
                     String low = out.toLowerCase(Locale.ROOT);
                     if (out.contains("NOTINSTALLED")) {
                         set(Step.NEED_INSTALL, "");
                     } else {
                         boolean logged = low.contains("logged in") && !low.contains("not logged in")
                                 || low.contains("api key configured");
-                        planIn = logged && !low.contains("api key");
-                        apiKey = !Providers.forAgent(agent).isEmpty();
+                        AppLifecycle.publish(() -> {
+                            planIn = logged && !low.contains("api key");
+                            apiKey = !Providers.forAgent(agent).isEmpty();
+                        });
                         if (logged || apiKey) {
-                            email = "";
-                            plan = planIn ? out.contains("ChatGPT") ? "ChatGPT" : "" : apiKey ? keyPlan() : "";
+                            AppLifecycle.publish(() -> {
+                                email = "";
+                                plan = planIn ? out.contains("ChatGPT") ? "ChatGPT" : "" : apiKey ? keyPlan() : "";
+                            });
                             set(Step.SIGNED_IN, "");
                         } else {
                             set(Step.SIGNED_OUT, "");
@@ -331,10 +364,11 @@ final class Account {
 
     /** Installs Buddy's Linux (4 MB) if needed, then the agent: Claude Code (~230 MB) or Codex. */
     void install(Context c) {
-        app = c.getApplicationContext();
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
+        AppLifecycle.publish(() -> app = c.getApplicationContext());
         if (busy()) return;
         final Context app = c.getApplicationContext();
-        errorDetail = "";
+        AppLifecycle.publish(() -> errorDetail = "");
         // an agent, node and Alpine's packages take a few hundred MB: ask for about 1 GB before starting
         long free = new android.os.StatFs(app.getFilesDir().getPath()).getAvailableBytes();
         if (free < 1024L * 1024 * 1024) {
@@ -344,6 +378,7 @@ final class Account {
         }
         set(Step.INSTALLING, app.getString(R.string.account_setting_up_linux));
         new Thread(() -> {
+            if (!AppLifecycle.currentWork()) return;
             try {
                 synchronized (Account.class) { // both agents use apk; don't run it twice at once
                     Linux.install(app);
@@ -353,41 +388,48 @@ final class Account {
                             + "ca-certificates procps coreutils findutils" + (claude() || agy() || grok() ? "" : " nodejs npm")
                             + (agy() ? " util-linux-misc" : "") // script: Antigravity's sign-in needs a terminal
                             + " && echo TOOLS_OK", 900);
+                    if (!AppLifecycle.currentWork()) return;
                     if (!o.contains("TOOLS_OK")) throw new IOException(tail(o));
                 }
                 if (claude()) {
                     set(Step.INSTALLING, app.getString(R.string.account_downloading_claude));
                     String o = Linux.exec(app, "curl -fsSL https://claude.ai/install.sh -o /tmp/install.sh && bash /tmp/install.sh"
                             + " && /root/.local/bin/claude --version && echo AGENT_OK", 1800);
+                    if (!AppLifecycle.currentWork()) return;
                     if (!o.contains("AGENT_OK")) throw new IOException(tail(o));
                 } else if (agy()) {
                     set(Step.INSTALLING, app.getString(R.string.account_downloading, name()));
                     // Google's installer picks the Alpine (musl) build and puts agy in ~/.local/bin
                     String o = Linux.exec(app, "curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh"
                             + " && bash /tmp/agy-install.sh 2>&1 | tail -5 && " + AGY_BIN + " --version && echo AGENT_OK", 1800);
+                    if (!AppLifecycle.currentWork()) return;
                     if (!o.contains("AGENT_OK")) throw new IOException(tail(o));
                 } else if (grok()) {
                     set(Step.INSTALLING, app.getString(R.string.account_downloading, name()));
                     // xAI's installer fetches one static binary (it runs on Alpine as it is) and links it in ~/.local/bin
                     String o = Linux.exec(app, "curl -fsSL https://x.ai/cli/install.sh -o /tmp/grok-install.sh"
                             + " && bash /tmp/grok-install.sh 2>&1 | tail -5 && " + GROK_BIN + " --version && echo AGENT_OK", 1800);
+                    if (!AppLifecycle.currentWork()) return;
                     if (!o.contains("AGENT_OK")) throw new IOException(tail(o));
                 } else if (opencode()) {
                     set(Step.INSTALLING, app.getString(R.string.account_downloading, name()));
                     // OpenCode 2 (npm @opencode/cli), always a fresh install (OC_REMOVE)
                     String o = Linux.exec(app, OC_REMOVE + " npm install -g @opencode/cli >/tmp/npm.log 2>&1;"
                             + " tail -5 /tmp/npm.log;" + OC_GLIBC + " opencode --version && echo AGENT_OK", 1800);
+                    if (!AppLifecycle.currentWork()) return;
                     if (!o.contains("AGENT_OK")) throw new IOException(tail(o));
                 } else {
                     set(Step.INSTALLING, app.getString(R.string.account_downloading, name()));
                     String o = Linux.exec(app, "sh /root/bin/install-codex.sh && echo AGENT_OK", 1800);
+                    if (!AppLifecycle.currentWork()) return;
                     if (!o.contains("AGENT_OK")) throw new IOException(tail(o));
                 }
                 set(Step.SIGNED_OUT, "");
                 refresh(app);
             } catch (Exception e) {
+                if (!AppLifecycle.currentWork()) return;
                 String raw = String.valueOf(e.getMessage()), plain = plainError(app, raw);
-                errorDetail = plain == null ? "" : raw;
+                AppLifecycle.publish(() -> errorDetail = plain == null ? "" : raw);
                 set(Step.ERROR, plain != null ? plain : app.getString(R.string.account_install_failed, raw));
             }
         }).start();
@@ -428,24 +470,31 @@ final class Account {
 
     /** Updates the agent (Codex stays pinned); {@link #updateNote} says what happened. */
     void update(Context c) {
-        app = c.getApplicationContext();
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
+        AppLifecycle.publish(() -> app = c.getApplicationContext());
         if (busy()) return;
         final Context app = c.getApplicationContext();
         final String before = version;
         final boolean toV2 = oldOpencode();
-        updating = true;
-        updateNote = "";
+        AppLifecycle.publish(() -> {
+            updating = true;
+            updateNote = "";
+        });
         set(Step.INSTALLING, toV2 ? app.getString(R.string.account_downloading, "OpenCode 2")
                 : app.getString(R.string.account_update_checking, name()));
         new Thread(() -> {
+            if (!AppLifecycle.currentWork()) return;
             String o;
             try {
                 if (claude()) {
                     o = Linux.exec(app, "/root/.local/bin/claude update 2>&1 | tail -3; echo VER=$(/root/.local/bin/claude --version)", 900);
+                    if (!AppLifecycle.currentWork()) return;
                 } else if (agy()) {
                     o = Linux.exec(app, AGY_BIN + " update 2>&1 | tail -3; echo VER=$(" + AGY_BIN + " --version)", 900);
+                    if (!AppLifecycle.currentWork()) return;
                 } else if (grok()) {
                     o = Linux.exec(app, GROK_BIN + " update 2>&1 | tail -3; echo VER=$(" + GROK_BIN + " --version)", 900);
+                    if (!AppLifecycle.currentWork()) return;
                 } else if (opencode()) {
                     // Reinstalls only when npm has a newer version (1.x counts: OpenCode 2 is a new npm package that
                     // keeps 1.x's connected providers). The install removes the old copy first (OC_REMOVE), so it
@@ -457,21 +506,25 @@ final class Account {
                             + " || { tail -3 /tmp/npm.log; exit 0; };" + OC_REMOVE
                             + " npm install -g @opencode/cli@$v >>/tmp/npm.log 2>&1; fi;"
                             + OC_GLIBC + " tail -3 /tmp/npm.log; echo VER=$(opencode --version)", 1800);
+                    if (!AppLifecycle.currentWork()) return;
                 } else {
                     Helper.sync(app);
                     o = Linux.exec(app, "sh /root/bin/install-codex.sh && echo VER=$(/root/bin/buddy-codex --version)", 1800);
+                    if (!AppLifecycle.currentWork()) return;
                 }
                 String after = ver(o);
                 if (after.isEmpty()) throw new IOException(tail(o));
-                updateNote = after.equals(before) ? app.getString(R.string.account_update_latest, after)
+                AppLifecycle.publish(() -> { updateNote = after.equals(before) ? app.getString(R.string.account_update_latest, after)
                         : before.isEmpty() ? app.getString(R.string.account_updated, after)
-                        : app.getString(R.string.account_updated_from, after, before);
-                if (toV2 && !after.startsWith("2") && !after.matches("[3-9].*")) updateNote = app.getString(
-                        R.string.account_update_opencode2_failed, after);
+                        : app.getString(R.string.account_updated_from, after, before); });
+                if (toV2 && !after.startsWith("2") && !after.matches("[3-9].*")) AppLifecycle.publish(() ->
+                        updateNote = app.getString(R.string.account_update_opencode2_failed, after));
             } catch (Exception e) {
-                updateNote = app.getString(R.string.account_update_failed, e.getMessage());
+                if (!AppLifecycle.currentWork()) return;
+                AppLifecycle.publish(() -> updateNote = app.getString(R.string.account_update_failed, e.getMessage()));
             }
-            updating = false;
+            if (!AppLifecycle.currentWork()) return;
+            AppLifecycle.publish(() -> updating = false);
             set(Step.CHECKING, "");
             refresh(app);
         }).start();
@@ -488,15 +541,19 @@ final class Account {
      *  under script, which gives it one. Grok always signs in with a device code: its link carries the code, so here
      *  it opens in the browser and the user confirms the code there; remote shows the link and code as for Codex. */
     void startLogin(Context c, boolean onOtherDevice) {
-        app = c.getApplicationContext();
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
+        AppLifecycle.publish(() -> app = c.getApplicationContext());
         if (busy() || opencode()) return; // OpenCode: providers are connected in the terminal (opencode auth login)
         final Context app = c.getApplicationContext();
-        url = null;
-        state = null;
-        userCode = null;
-        remote = onOtherDevice;
+        AppLifecycle.publish(() -> {
+            url = null;
+            state = null;
+            userCode = null;
+            remote = onOtherDevice;
+        });
         set(Step.WAITING_BROWSER, app.getString(R.string.signin_starting));
         new Thread(() -> {
+            if (!AppLifecycle.currentWork()) return;
             StringBuilder out = new StringBuilder();
             try {
                 Process p = (claude()
@@ -507,8 +564,11 @@ final class Account {
                         : onOtherDevice ? Linux.builder(app, "/root/bin/buddy-codex", "login", "--device-auth")
                         : Linux.builder(app, "/root/bin/buddy-codex", "login")).start();
                 synchronized (this) {
-                    login = p;
-                    loginIn = p.getOutputStream();
+                    if (!AppLifecycle.currentWork()) { p.destroy(); return; }
+                    AppLifecycle.publish(() -> {
+                        login = p;
+                        loginIn = p.getOutputStream();
+                    });
                 }
                 if (agy()) new Thread(() -> {
                     // signed in but agy still busy on its terminal (a first-run question nobody sees): stop it
@@ -532,13 +592,16 @@ final class Account {
                     byte[] buf = new byte[4096];
                     int n;
                     while ((n = in.read(buf)) > 0) {
+                        if (!AppLifecycle.currentWork()) return;
                         out.append(new String(buf, 0, n, StandardCharsets.UTF_8));
                         String plain = stripAnsi(out.toString());
                         if (url == null) {
                             Matcher m = u.matcher(plain);
                             if (m.find()) {
-                                url = m.group();
-                                state = Uri.parse(url).getQueryParameter("state");
+                                AppLifecycle.publish(() -> {
+                                    url = m.group();
+                                    state = Uri.parse(url).getQueryParameter("state");
+                                });
                                 // a device flow (Codex, Grok) also needs its code before the screen is useful
                                 if (!device) set(Step.WAITING_BROWSER, "");
                             }
@@ -550,13 +613,15 @@ final class Account {
                                 if (!m.find()) m = null;
                             }
                             if (m != null) {
-                                userCode = m.group(1);
+                                final String foundCode = m.group(1);
+                                AppLifecycle.publish(() -> userCode = foundCode);
                                 if (url != null) set(Step.WAITING_BROWSER, "");
                             }
                         }
                     }
                 }
                 int exit = p.waitFor();
+                if (!AppLifecycle.currentWork()) return;
                 // nothing printed: the exit code is all there is to show why
                 if (exit != 0 && out.toString().trim().isEmpty()) out.append("exit ").append(exit);
                 if (exit == 0) {
@@ -574,12 +639,19 @@ final class Account {
                 out.append("\n").append(e.getMessage());
             } finally {
                 synchronized (this) {
-                    login = null;
-                    loginIn = null;
+                    if (AppLifecycle.currentWork()) {
+                        AppLifecycle.publish(() -> {
+                            login = null;
+                            loginIn = null;
+                        });
+                    }
                 }
             }
-            url = null;
-            step = Step.CHECKING;
+            if (!AppLifecycle.currentWork()) return;
+            AppLifecycle.publish(() -> {
+                url = null;
+                step = Step.CHECKING;
+            });
             refresh(app);
             final String why = tail(stripAnsi(out.toString()));
             main.postDelayed(() -> {
@@ -590,12 +662,12 @@ final class Account {
 
     /** Hands Claude's one-time code to Claude Code. Returns false if no sign-in is waiting. */
     synchronized boolean submit(String code) {
-        if (loginIn == null || code == null || code.trim().isEmpty()) return false;
+        if (!AppLifecycle.currentWork() || loginIn == null || code == null || code.trim().isEmpty()) return false;
         try {
             // Antigravity reads it on a terminal (see startLogin), where Enter is a carriage return
             loginIn.write((code.trim() + (agy() ? "\r" : "\n")).getBytes(StandardCharsets.UTF_8));
             loginIn.flush();
-            codeSentAt = System.currentTimeMillis();
+            AppLifecycle.publish(() -> codeSentAt = System.currentTimeMillis());
             set(Step.FINISHING, BuddyApp.str(R.string.signin_finishing));
             return true;
         } catch (IOException e) {
@@ -604,13 +676,26 @@ final class Account {
     }
 
     synchronized void cancelLogin() {
+        if (!AppLifecycle.currentWork()) return;
         if (login != null) login.destroy();
+        if (app != null && Prefs.exited(app)) {
+            main.removeCallbacksAndMessages(null);
+            AppLifecycle.publish(() -> {
+                login = null;
+                loginIn = null;
+                url = state = userCode = null;
+                updating = false;
+                agyModelsBusy = grokModelsBusy = false;
+            });
+            if (busy()) set(Step.CHECKING, "");
+        }
     }
 
     /** Signs out of the plan (or the account). API key services stay (Settings → API keys). */
     void logout(Context c) {
         final Context app = c.getApplicationContext();
         new Thread(() -> {
+            if (!AppLifecycle.currentWork()) return;
             try {
                 if (agy()) Linux.exec(app, "rm -f " + AGY_TOKEN, 60); // agy only signs out from its own screen (/logout)
                 else if (grok()) Linux.exec(app, GROK_BIN + " logout", 60);

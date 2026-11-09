@@ -14,7 +14,6 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.service.notification.StatusBarNotification;
@@ -198,7 +197,7 @@ final class Triggers implements ChatHub.Listener {
     static Runnable logListener;
 
     private final Context app;
-    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Handler main = AppLifecycle.workHandler();
     private final Map<String, Job> bursts = new HashMap<>();
     private final ArrayDeque<Job> queue = new ArrayDeque<>();
     private final Map<String, String> lastSig = new HashMap<>();
@@ -213,6 +212,16 @@ final class Triggers implements ChatHub.Listener {
         return instance;
     }
 
+    static void stop() {
+        if (instance == null) return;
+        instance.main.removeCallbacksAndMessages(null);
+        instance.bursts.clear();
+        instance.queue.clear();
+        instance.carried.clear();
+        active.clear();
+        instance.releaseWake();
+    }
+
     private Triggers(Context app) {
         this.app = app;
         ChatHub.get(app).addListener(this);
@@ -220,7 +229,7 @@ final class Triggers implements ChatHub.Listener {
             app.getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(new ConnectivityManager.NetworkCallback() {
                 @Override
                 public void onAvailable(Network network) {
-                    main.post(Triggers.this::pump);
+                    AppLifecycle.postSystemState(main, Triggers.this::pump);
                 }
             });
         } catch (Exception ignored) {
@@ -354,7 +363,7 @@ final class Triggers implements ChatHub.Listener {
      * where its new messages gather, and runs it when the limit allows.
      */
     private void pump() {
-        if (starting) return;
+        if (starting || Prefs.exited(app)) return;
         long now = SystemClock.elapsedRealtime();
         if (queue.isEmpty() || !active.isEmpty()) return;
         BuddyService svc = BuddyService.get();
@@ -843,7 +852,7 @@ final class Triggers implements ChatHub.Listener {
      */
     static void approvalShown(Context c, String chat, String summary, int seconds) {
         if (!locked(c)) return;
-        new Handler(Looper.getMainLooper()).post(() -> { // chats are read on the main thread
+        AppLifecycle.workHandler().post(() -> { // chats are read on the main thread
             Job j = chat == null ? null : active.get(chat);
             Sessions.Session s = chat == null ? null : ChatHub.get(c).sessions.find(chat);
             String title = j != null ? c.getString(R.string.rules_approval_title, j.note.who(), j.note.app)
@@ -870,7 +879,7 @@ final class Triggers implements ChatHub.Listener {
     }
 
     static void approvalDone(Context c, String chat) {
-        new Handler(Looper.getMainLooper()).post(() ->
+        AppLifecycle.workHandler().post(() ->
                 c.getSystemService(NotificationManager.class).cancel("rule_ok", String.valueOf(chat).hashCode()));
     }
 

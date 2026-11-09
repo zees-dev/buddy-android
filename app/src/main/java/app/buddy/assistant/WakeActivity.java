@@ -24,6 +24,10 @@ public class WakeActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        if (Prefs.exited(this)) {
+            finish();
+            return;
+        }
         setShowWhenLocked(true);
         setTurnScreenOn(true);
         shown = this;

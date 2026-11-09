@@ -311,6 +311,13 @@ final class Sessions {
         }
     }
 
+    boolean flushForExit() {
+        if (!flush()) return false;
+        synchronized (this) {
+            return written.size() == all.size() && sp.edit().commit();
+        }
+    }
+
     private static JSONObject toJson(Session s) throws Exception {
         JSONArray msgs = new JSONArray();
         for (Msg m : s.messages) {

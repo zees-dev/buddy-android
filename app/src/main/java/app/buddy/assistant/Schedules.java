@@ -12,7 +12,6 @@ import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
 
@@ -188,7 +187,7 @@ public final class Schedules extends BroadcastReceiver {
     private static final String ACTION_FIRE = "app.buddy.assistant.SCHEDULE", CHANNEL = "schedules", TAG = "schedule";
     /** How long a task waits for Buddy to be free, or a run for the user to unlock, before giving up. */
     private static final long WAIT_MS = 3600_000L, LOOK_MS = 30_000L, UNLOCK_WAIT_MS = 45_000L;
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
     /** Tasks whose time came while Buddy was busy: chat id → when they're given up (elapsedRealtime). Main thread. */
     private static final Map<String, Long> waiting = new LinkedHashMap<>();
     /** Chats in a scheduled task's run (the phone tools look them up from their own threads). */
@@ -201,6 +200,7 @@ public final class Schedules extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context c, Intent i) {
+        if (Prefs.exited(c)) return;
         if (!ACTION_FIRE.equals(i.getAction())) return;
         if (i.hasExtra("later")) fireLater(c.getApplicationContext(), i.getStringExtra("id"), i.getStringExtra("later"));
         else fire(c.getApplicationContext(), i.getStringExtra("id"), i.getLongExtra("at", 0));
@@ -210,6 +210,7 @@ public final class Schedules extends BroadcastReceiver {
     public static final class Boot extends BroadcastReceiver {
         @Override
         public void onReceive(Context c, Intent i) {
+            if (Prefs.exited(c)) return;
             sync(c.getApplicationContext());
         }
     }
@@ -218,6 +219,7 @@ public final class Schedules extends BroadcastReceiver {
 
     /** Sets every scheduled chat's next alarm (main thread). */
     static void sync(Context c) {
+        if (Prefs.exited(c)) return;
         for (Sessions.Session s : new ArrayList<>(ChatHub.get(c).sessions.all)) {
             if (s.schedule != null) set(c, s);
             for (Later l : s.later) setLater(c, s, l); // one whose time passed while the phone was off comes at once
@@ -368,7 +370,7 @@ public final class Schedules extends BroadcastReceiver {
 
     /** Starts what waits, skips what can't run, gives up on what waited too long. */
     private static void pump() {
-        if (pumping || app == null) return;
+        if (pumping || app == null || Prefs.exited(app)) return;
         pumping = true;
         try {
             ChatHub hub = ChatHub.get(app);
@@ -493,8 +495,20 @@ public final class Schedules extends BroadcastReceiver {
 
     /** The service started (after boot, an update, or being switched on): alarms are set again (main thread). */
     static void serviceStarted(Context c) {
+        if (Prefs.exited(c)) return;
         listen(c);
         sync(c);
+    }
+
+    static void stop(Context c, ChatHub hub) {
+        main.removeCallbacksAndMessages(null);
+        if (android.os.Build.VERSION.SDK_INT >= 34) c.getSystemService(AlarmManager.class).cancelAll();
+        else if (hub != null) for (Sessions.Session s : hub.sessions.all) cancelAll(c, s);
+        waiting.clear();
+        running.clear();
+        needScreen.clear();
+        releaseWake();
+        WakeActivity.close();
     }
 
     // --------------------------------------------------- the screen while locked

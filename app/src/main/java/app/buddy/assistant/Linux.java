@@ -98,7 +98,7 @@ final class Linux {
         return a;
     }
 
-    static ProcessBuilder builder(Context c, String... cmd) {
+    static Command builder(Context c, String... cmd) {
         String lib = c.getApplicationInfo().nativeLibraryDir;
         File tmp = new File(c.getCacheDir(), "proot");
         tmp.mkdirs();
@@ -107,7 +107,25 @@ final class Linux {
         pb.environment().put("PROOT_TMP_DIR", tmp.getAbsolutePath());
         pb.environment().put("LD_LIBRARY_PATH", lib);
         pb.redirectErrorStream(true);
-        return pb;
+        return new Command(c.getApplicationContext(), pb);
+    }
+
+    static final class Command {
+        private final Context app;
+        private final ProcessBuilder builder;
+
+        private Command(Context app, ProcessBuilder builder) {
+            this.app = app;
+            this.builder = builder;
+        }
+
+        void redirectErrorStream(boolean redirect) {
+            builder.redirectErrorStream(redirect);
+        }
+
+        Process start() throws IOException {
+            return AppLifecycle.start(app, builder);
+        }
     }
 
     /** Runs a shell command inside Alpine and returns its output (stdout and stderr), with the exit code. */

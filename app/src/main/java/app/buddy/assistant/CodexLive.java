@@ -84,7 +84,8 @@ final class CodexLive {
         uis.remove(u);
     }
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
+    private static final Handler pageMain = new Handler(Looper.getMainLooper());
     private static Context app;
     private static Sessions.Session ses;
     private static WebView web;
@@ -242,7 +243,7 @@ final class CodexLive {
             } catch (Exception e) {
                 log("end: page " + e);
             }
-            main.postDelayed(() -> {
+            pageMain.postDelayed(() -> {
                 try {
                     w.destroy();
                     log("end: page destroyed");
@@ -633,19 +634,28 @@ final class CodexLive {
             }
         });
         final WebView mine = web;
+        final int callGeneration = AppLifecycle.workGeneration();
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void offer(String sdp) {
                 CodexLive.log("page: offer ready");
-                new Thread(() -> startCall(mine, sdp), "codex-live-call").start();
+                pageMain.post(() -> {
+                    if (web == mine && !Prefs.exited(app)) new Thread(() -> startCall(mine, sdp), "codex-live-call").start();
+                });
             }
 
             /** The page couldn't open the microphone itself: Buddy records instead (see pull). */
             @JavascriptInterface
             public boolean ownMic() {
-                boolean ok = web == mine && startCapture();
-                CodexLive.log("Buddy's own recording (fallback): " + (ok ? "on" : "failed"));
-                return ok;
+                int previous = AppLifecycle.workGeneration();
+                AppLifecycle.bindWork(callGeneration);
+                try {
+                    synchronized (AppLifecycle.class) {
+                        return AppLifecycle.currentWork() && web == mine && !Prefs.exited(app) && startCapture();
+                    }
+                } finally {
+                    AppLifecycle.bindWork(previous);
+                }
             }
 
             /** The next bit of Buddy's recording (16-bit mono, 16 kHz) as base64; "" when there's none yet. */
@@ -657,7 +667,7 @@ final class CodexLive {
             /** Loudness of the microphone or the voice (0..1), for the bar's waveform; voice: the voice is audible. */
             @JavascriptInterface
             public void level(float v, boolean voice) {
-                main.post(() -> {
+                pageMain.post(() -> {
                     if (web != mine) return;
                     if (voice) lastAudible = SystemClock.elapsedRealtime();
                     if (voice != audible) {
@@ -679,7 +689,7 @@ final class CodexLive {
 
             @JavascriptInterface
             public void connected() {
-                main.post(() -> {
+                pageMain.post(() -> {
                     if (web != mine || connected) return; // reported by more than one event
                     connected = true;
                     lastActivity = SystemClock.elapsedRealtime();
@@ -694,7 +704,7 @@ final class CodexLive {
             @JavascriptInterface
             public void failed(String why) {
                 CodexLive.log("page failed: " + why);
-                main.post(() -> {
+                pageMain.post(() -> {
                     if (web == mine) end(app.getString(R.string.dictation_chatgpt_error,
                             "the connection failed".equals(why) ? app.getString(R.string.dictation_connection_failed) : why));
                 });
@@ -708,8 +718,11 @@ final class CodexLive {
         try {
             CodexDictation.ensureServer(app);
             String t = CodexDictation.newThread();
+            AppLifecycle.publish(() -> {
+                if (web == page) thread = t;
+            });
+            AppLifecycle.requireRunning(app);
             if (web != page) return; // ended meanwhile
-            thread = t;
             log("call: thread " + t);
             JSONObject r = CodexDictation.request("thread/realtime/start", new JSONObject()
                     .put("threadId", t)
@@ -767,16 +780,18 @@ final class CodexLive {
         recording = true;
         new Thread(() -> {
             byte[] buf = new byte[1280]; // 40 ms
-            while (recording) {
+            while (recording && AppLifecycle.currentWork()) {
                 int n = r.read(buf, 0, buf.length);
                 if (n < 0) break;
                 if (n == 0) continue;
-                synchronized (chunks) {
-                    chunks.add(java.util.Arrays.copyOf(buf, n));
-                    while (chunks.size() > 125) chunks.poll(); // keep 5 s at most
-                }
+                AppLifecycle.publish(() -> {
+                    synchronized (chunks) {
+                        chunks.add(java.util.Arrays.copyOf(buf, n));
+                        while (chunks.size() > 125) chunks.poll(); // keep 5 s at most
+                    }
+                });
             }
-            recording = false;
+            AppLifecycle.publish(() -> recording = false);
             try {
                 r.stop();
             } catch (Exception ignored) {

@@ -18,6 +18,7 @@ public class NotificationWatcher extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         instance = this;
+        if (Prefs.exited(this)) return;
         try {
             AutoPause.onNotifications(getActiveNotifications());
         } catch (Exception ignored) {
@@ -26,6 +27,7 @@ public class NotificationWatcher extends NotificationListenerService {
 
     @Override
     public void onNotificationRemoved(StatusBarNotification sbn) {
+        if (Prefs.exited(this)) return;
         AutoPause.onNotification(sbn, false);
     }
 
@@ -52,6 +54,7 @@ public class NotificationWatcher extends NotificationListenerService {
 
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
+        if (Prefs.exited(this)) return;
         AutoPause.onNotification(sbn, true);
         try {
             String pkg = sbn.getPackageName();

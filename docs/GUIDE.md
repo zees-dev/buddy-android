@@ -110,6 +110,7 @@ Turn on **Settings → Background browser**: the first time, Buddy downloads Chr
 | **Hold the bubble** | Its actions fan out: **Stop task**, **Pause**/**Resume**, **Add instruction** (by voice), **Stop voice**, **Talk**, **Open chat**, **Hide**. Slide onto one and let go, or let go and tap |
 | Drag the bubble | Move it; it snaps to the nearest edge |
 | Drag it onto the ✕ | Hide it. A notification brings it back. It never shows on the lock screen. |
+| Hidden-bubble notification | **Open chats** opens the app. **Exit** stops agents, phone tools, terminals (including the private SSH tunnel), schedules and notification rules until you open Buddy again. Saved chats, settings and permissions remain. **Force stop…** applies the same stopped state and opens Android’s App info; tap **Force stop** there for Android’s system stop. Android can recreate an idle service process after either action, and its Force stop may disable accessibility, requiring you to enable it again. |
 | Back | Close the keyboard, then collapse the panel |
 | **Chats** / tap the title | Switch chats, start a new one, or delete one |
 | Long-press a message | Copy it |

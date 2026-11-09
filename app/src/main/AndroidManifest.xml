@@ -76,6 +76,14 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <activity
+            android:name=".ExitActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- "Share to Buddy": photos, files, links and text from any app, into a new or recent chat -->
         <activity
             android:name=".ShareActivity"

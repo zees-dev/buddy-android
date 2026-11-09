@@ -11,7 +11,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Handler;
-import android.os.Looper;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -90,6 +89,7 @@ public final class Updates extends BroadcastReceiver {
 
     /** {@link #install(Context, Release)}; with user, what went wrong is in the user's language (for the sheet). */
     private static String install(Context c, Release r, boolean user) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return c.getString(R.string.exit_stopped);
         if (r.apkUrl == null || !r.apkUrl.startsWith(REPO + "/releases/download/"))
             return user ? c.getString(R.string.update_error_no_apk) : "The fork release has no buddy.apk.";
         File out = FilesProvider.apkFile(c);
@@ -122,34 +122,39 @@ public final class Updates extends BroadcastReceiver {
         } catch (android.content.pm.PackageManager.NameNotFoundException e) {
             return "Could not verify this fork's signing identity. It was not opened.";
         }
-        if (McpServer.CALLER_SESSION.get() != null) McpServer.requireActive();
-        if (!c.getPackageManager().canRequestPackageInstalls()) {
-            c.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:" + c.getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            return NEEDS_PERMISSION;
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork() || Prefs.exited(c)) return c.getString(R.string.exit_stopped);
+            if (McpServer.CALLER_SESSION.get() != null) McpServer.requireActive();
+            if (!c.getPackageManager().canRequestPackageInstalls()) {
+                c.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + c.getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                return NEEDS_PERMISSION;
+            }
+            c.startActivity(new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(FilesProvider.apkUri(), "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION));
+            cancel(c);
+            return OPENED;
         }
-        c.startActivity(new Intent(Intent.ACTION_VIEW)
-                .setDataAndType(FilesProvider.apkUri(), "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION));
-        cancel(c);
-        return OPENED;
     }
 
     // ------------------------------------------------------------ daily check
 
     /** At most once a day (if Update notices is on): notify once per new version. */
     static void maybeCheck(Context c) {
-        if (!Prefs.updateNotices(c)) return;
+        if (!AppLifecycle.currentWork() || Prefs.exited(c) || !Prefs.updateNotices(c)) return;
         long now = System.currentTimeMillis();
         if (now - Prefs.updateCheckedAt(c) < DAY) return;
         new Thread(() -> {
             try {
                 Release r = latest();
-                Prefs.setUpdateCheckedAt(c, now);
-                if (r.newer() && r.apkUrl != null && !r.version.equals(Prefs.updateNotified(c))) {
-                    notify(c, r);
-                    Prefs.setUpdateNotified(c, r.version);
-                }
+                AppLifecycle.workHandler().post(() -> {
+                    Prefs.setUpdateCheckedAt(c, now);
+                    if (r.newer() && r.apkUrl != null && !r.version.equals(Prefs.updateNotified(c))) {
+                        notify(c, r);
+                        Prefs.setUpdateNotified(c, r.version);
+                    }
+                });
             } catch (Exception ignored) {
                 // offline: try again at the next check
             }
@@ -200,7 +205,7 @@ public final class Updates extends BroadcastReceiver {
 
     /** "Buddy X is available": what's new, and Update. Checks GitHub first; says so if Buddy is up to date. */
     static void showSheet(Activity a) {
-        Handler main = new Handler(Looper.getMainLooper());
+        Handler main = AppLifecycle.workHandler();
         Toast checking = Toast.makeText(a, R.string.update_checking, Toast.LENGTH_SHORT);
         checking.show();
         new Thread(() -> {
@@ -251,7 +256,7 @@ public final class Updates extends BroadcastReceiver {
         c.addView(btns, bp);
         Dialog d = bottomSheet(a, c);
         later.setOnClickListener(v -> d.dismiss());
-        Handler main = new Handler(Looper.getMainLooper());
+        Handler main = AppLifecycle.workHandler();
         update.setOnClickListener(v -> {
             update.setEnabled(false);
             update.setText(R.string.update_downloading);
@@ -295,7 +300,10 @@ public final class Updates extends BroadcastReceiver {
     static void copy(InputStream in, OutputStream o) throws IOException {
         byte[] buf = new byte[64 * 1024];
         int n;
-        while ((n = in.read(buf)) > 0) o.write(buf, 0, n);
+        while ((n = in.read(buf)) > 0) {
+            AppLifecycle.requireRunning(BuddyApp.context());
+            o.write(buf, 0, n);
+        }
     }
 
     /** "2.1.10" vs "2.1.9": compares number by number. */

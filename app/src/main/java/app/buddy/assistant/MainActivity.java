@@ -30,12 +30,20 @@ public class MainActivity extends Screen implements ChatHub.Listener, Account.Li
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (!AppLifecycle.reopen(this)) {
+            finish();
+            return;
+        }
         if (intent.getBooleanExtra("update", false)) Updates.showSheet(this);
     }
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        if (!AppLifecycle.reopen(this)) {
+            finish();
+            return;
+        }
         hub = ChatHub.get(this);
         if (!Prefs.onboarded(this)) {
             // already set up: no need for the guide
@@ -107,7 +115,7 @@ public class MainActivity extends Screen implements ChatHub.Listener, Account.Li
 
     @Override
     protected void onPause() {
-        hub.removeListener(this);
+        if (hub != null) hub.removeListener(this);
         if (Waiting.listener == waitingChanged) Waiting.listener = null;
         Account.removeListener(this);
         super.onPause();

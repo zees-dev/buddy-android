@@ -83,6 +83,7 @@ final class McpServer {
 
     void stop() {
         running = false;
+        chatTokens.clear();
         try {
             if (socket != null) socket.close();
         } catch (IOException ignored) {

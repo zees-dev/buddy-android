@@ -11,6 +11,7 @@ public class BuddyApp extends Application {
     public void onCreate() {
         super.onCreate();
         ctx = this;
+        AppLifecycle.initialize();
     }
 
     static Context context() {

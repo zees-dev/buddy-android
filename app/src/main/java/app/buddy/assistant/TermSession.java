@@ -2,7 +2,6 @@ package app.buddy.assistant;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 
 import java.io.FileInputStream;
@@ -36,7 +35,7 @@ final class TermSession implements TermEmulator.Host {
     final int number;
 
     final TermEmulator emulator;
-    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Handler main = AppLifecycle.workHandler();
     private final ExecutorService writer = Executors.newSingleThreadExecutor();
     private Listener listener;
     private int fd = -1, pid;
@@ -70,8 +69,14 @@ final class TermSession implements TermEmulator.Host {
             shell = "cd /root; exec bash -l -c '" + (first + "; exec bash -l").replace("'", "'\\''") + "'";
         }
         TermSession s = launch(c, rows, cols, shell);
-        all.add(s);
-        current = s;
+        if (!AppLifecycle.currentWork()) {
+            s.finish();
+            throw new IOException(c.getString(R.string.exit_stopped));
+        }
+        AppLifecycle.publish(() -> {
+            all.add(s);
+            current = s;
+        });
         return s;
     }
 
@@ -94,7 +99,7 @@ final class TermSession implements TermEmulator.Host {
                 "LD_LIBRARY_PATH=" + lib,
                 "PATH=/system/bin",
         };
-        int[] r = Pty.start(args[0], args, env, c.getFilesDir().getAbsolutePath(), rows, cols);
+        int[] r = AppLifecycle.startTerminal(c, args[0], args, env, c.getFilesDir().getAbsolutePath(), rows, cols);
         s.pid = r[1];
         ParcelFileDescriptor pfd = ParcelFileDescriptor.adoptFd(r[0]); // owns the pty from here on
         s.pty = pfd;
@@ -124,15 +129,18 @@ final class TermSession implements TermEmulator.Host {
         // fails), so the session ends when the pty closes (reader above), not here.
         Thread waiter = new Thread(() -> {
             int code = Pty.waitFor(s.pid);
+            AppLifecycle.terminalEnded(s.pid);
             if (code >= 0) s.exitCode = code;
         }, "term-waiter");
         waiter.start();
         return s;
     }
 
-    private void ended(int code) {
+    private synchronized void ended(int code) {
         if (exited) return;
         exited = true;
+        writer.shutdownNow();
+        closePty();
         main.post(() -> {
             if (listener != null) listener.onExited(code);
         });
@@ -165,14 +173,15 @@ final class TermSession implements TermEmulator.Host {
     // ---------------------------------------------------------------- input
 
     @Override
-    public void write(byte[] b) {
+    public synchronized void write(byte[] b) {
         if (exited || out == null) return;
-        writer.execute(() -> {
+        writer.execute(AppLifecycle.wrapWork(() -> {
+            if (exited) return;
             try {
                 out.write(b);
             } catch (IOException ignored) {
             }
-        });
+        }));
     }
 
     void write(String s) {
@@ -200,10 +209,31 @@ final class TermSession implements TermEmulator.Host {
         });
     }
 
+    static void finishAll() {
+        for (TermSession session : new java.util.ArrayList<>(all)) session.finish();
+    }
+
     /** Ends the shell (and everything it started). */
-    void finish() {
+    synchronized void finish() {
         if (!exited) Pty.hangup(pid);
-        all.remove(this);
-        if (current == this) current = all.isEmpty() ? null : all.get(all.size() - 1);
+        exited = true;
+        writer.shutdownNow();
+        closePty();
+        main.removeCallbacksAndMessages(null);
+        listener = null;
+        AppLifecycle.publish(() -> {
+            all.remove(this);
+            if (current == this) current = all.isEmpty() ? null : all.get(all.size() - 1);
+        });
+    }
+
+    private void closePty() {
+        if (pty == null) return;
+        try {
+            pty.close();
+        } catch (IOException ignored) {
+        }
+        pty = null;
+        fd = -1;
     }
 }

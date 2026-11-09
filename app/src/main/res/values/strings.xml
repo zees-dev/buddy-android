@@ -211,6 +211,12 @@
     <string name="notice_hidden_text">Tap to show the bubble again.</string>
     <!-- Notification button: opens Buddy's chat list. Keep short. -->
     <string name="notice_open_chats">Open chats</string>
+    <string name="notice_exit">Exit</string>
+    <string name="notice_force_stop">Force stop…</string>
+    <string name="exit_stopped">Buddy has exited. Open Buddy to start it again.</string>
+    <string name="exit_still_stopping">Buddy is still stopping. Try opening it again shortly.</string>
+    <string name="exit_save_failed">Saving failed. Reopen Buddy to retry. Force stop can discard changes and prevent Buddy from remembering Exit.</string>
+    <string name="exit_settings_unavailable">Buddy exited. To force stop it, open its App info in Android Settings.</string>
 
     <!-- Buddy's own updates (GitHub version): notification, update sheet and messages. -->
     <!-- Notification category name in Android's notification settings for Buddy. -->

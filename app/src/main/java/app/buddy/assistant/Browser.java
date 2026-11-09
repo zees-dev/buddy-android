@@ -4,7 +4,6 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.SystemClock;
 
 import org.json.JSONArray;
@@ -60,7 +59,7 @@ final class Browser {
     static volatile State state = State.OFF;
     static volatile String detail = "";
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
     private static final List<Listener> listeners = new ArrayList<>();
     private static final ExecutorService work = Executors.newCachedThreadPool();
     private static final ScheduledExecutorService acks = Executors.newSingleThreadScheduledExecutor();
@@ -117,14 +116,18 @@ final class Browser {
     }
 
     private static void set(State s, String d) {
-        state = s;
-        detail = d == null ? "" : d;
+        if (!AppLifecycle.currentWork()) return;
+        AppLifecycle.publish(() -> {
+            state = s;
+            detail = d == null ? "" : d;
+        });
         changed();
     }
 
     /** Something used the browser: it isn't idle. */
     static void used() {
-        lastUse = SystemClock.elapsedRealtime();
+        if (!AppLifecycle.currentWork()) return;
+        AppLifecycle.publish(() -> lastUse = SystemClock.elapsedRealtime());
     }
 
     // ------------------------------------------------------------ start, stop
@@ -156,6 +159,7 @@ final class Browser {
 
     /** Starts it in the background (no wait). */
     static void start(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         synchronized (Browser.class) {
             app = c.getApplicationContext();
             used();
@@ -164,21 +168,22 @@ final class Browser {
                 set(State.ERROR, app.getString(R.string.helper_linux_missing));
                 return;
             }
-            state = State.STARTING;
+            AppLifecycle.publish(() -> state = State.STARTING);
         }
         set(installed(app) ? State.STARTING : State.INSTALLING, "");
-        work.execute(Browser::run);
+        work.execute(AppLifecycle.wrapWork(Browser::run));
     }
 
     /** Installs Chromium without starting it (Settings, when the switch goes on). */
     static void install(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         final Context a = c.getApplicationContext();
         synchronized (Browser.class) {
             if (installed(a) || proc != null || state == State.INSTALLING || state == State.STARTING) return;
-            state = State.INSTALLING;
+            AppLifecycle.publish(() -> state = State.INSTALLING);
         }
         set(State.INSTALLING, "");
-        work.execute(() -> {
+        work.execute(AppLifecycle.wrapWork(() -> {
             try {
                 Helper.sync(a);
                 String out = Linux.exec(a, "/bin/sh /root/bin/buddy-browser install 2>&1", 1800);
@@ -187,7 +192,7 @@ final class Browser {
             } catch (Exception e) {
                 set(State.ERROR, e.getMessage());
             }
-        });
+        }));
     }
 
     private static void run() {
@@ -195,7 +200,7 @@ final class Browser {
         try {
             Helper.sync(app);
             String lang = java.util.Locale.getDefault().toLanguageTag();
-            ProcessBuilder pb = Linux.builder(app, "/usr/bin/env", "BUDDY_LANG=" + lang, "/bin/sh", "/root/bin/buddy-browser", "run");
+            Linux.Command pb = Linux.builder(app, "/usr/bin/env", "BUDDY_LANG=" + lang, "/bin/sh", "/root/bin/buddy-browser", "run");
             pb.redirectErrorStream(false); // stdout carries the protocol; proot's and the script's notes come on stderr
             p = pb.start();
         } catch (Exception e) {
@@ -203,8 +208,10 @@ final class Browser {
             return;
         }
         synchronized (Browser.class) {
-            proc = p;
-            pipe = p.getOutputStream();
+            if (!AppLifecycle.currentWork()) { p.destroy(); return; }
+            OutputStream output = p.getOutputStream();
+            AppLifecycle.publish(() -> { proc = p; pipe = output; });
+            if (!AppLifecycle.currentWork()) { p.destroy(); return; }
         }
         final CountDownLatch launching = new CountDownLatch(1);
         final StringBuilder notes = new StringBuilder();
@@ -212,6 +219,7 @@ final class Browser {
             try (BufferedReader in = new BufferedReader(new InputStreamReader(p.getErrorStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = in.readLine()) != null) {
+                    if (!AppLifecycle.currentWork()) return;
                     line = line.trim();
                     if (line.equals("BUDDY_STATUS installing")) set(State.INSTALLING, "");
                     else if (line.equals("BUDDY_STATUS starting")) {
@@ -265,6 +273,7 @@ final class Browser {
             byte[] buf = new byte[64 * 1024];
             int n;
             while ((n = in.read(buf)) > 0) {
+                if (!AppLifecycle.currentWork()) return;
                 int from = 0;
                 for (int i = 0; i < n; i++) {
                     if (buf[i] != 0) continue;
@@ -284,10 +293,9 @@ final class Browser {
         }
         boolean mine;
         synchronized (Browser.class) {
-            mine = proc == p;
+            mine = AppLifecycle.currentWork() && proc == p;
             if (mine) {
-                proc = null;
-                pipe = null;
+                AppLifecycle.publish(() -> { proc = null; pipe = null; });
             }
         }
         if (!mine) return;
@@ -297,32 +305,57 @@ final class Browser {
 
     /** Forget every tab and wake every waiting call: the browser is gone. */
     private static void reset() {
-        tabs.clear();
-        sessions.clear();
-        pages.clear();
-        dialogs.clear();
-        casting.clear();
-        worlds.clear();
-        owners.clear();
-        for (AtomicReference<JSONObject> w : waiting.values()) {
-            synchronized (w) {
-                w.notifyAll();
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            tabs.clear();
+            sessions.clear();
+            pages.clear();
+            dialogs.clear();
+            casting.clear();
+            worlds.clear();
+            owners.clear();
+            for (AtomicReference<JSONObject> w : waiting.values()) {
+                synchronized (w) {
+                    w.notifyAll();
+                }
             }
+            waiting.clear();
+            main.removeCallbacks(idleCheck);
         }
-        waiting.clear();
-        main.removeCallbacks(idleCheck);
     }
 
     /** Closes Chromium (it saves its sign-ins first) and waits for it to end. */
     static void stop() {
+        if (!AppLifecycle.currentWork()) return;
+        main.removeCallbacksAndMessages(null);
         Process p;
+        OutputStream output;
         synchronized (Browser.class) {
+            if (!AppLifecycle.currentWork()) return;
             p = proc;
+            output = pipe;
         }
-        if (p == null) return;
-        try {
-            call("Browser.close", null, null, 3000);
-        } catch (Exception ignored) {
+        if (p == null) {
+            reset();
+            set(State.OFF, "");
+            return;
+        }
+        if (output != null) {
+            // Teardown targets only the captured browser, even after admission has stopped.
+            Thread close = new Thread(() -> {
+                try {
+                    byte[] message = ("{\"id\":" + ids.incrementAndGet() + ",\"method\":\"Browser.close\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    synchronized (output) {
+                        output.write(message);
+                        output.write(0);
+                        output.flush();
+                    }
+                } catch (IOException ignored) {
+                }
+            }, "browser-close");
+            close.setDaemon(true);
+            close.start();
         }
         stopProcess(p);
     }
@@ -337,9 +370,9 @@ final class Browser {
         }
         if (p.isAlive()) p.destroyForcibly();
         synchronized (Browser.class) {
+            if (!AppLifecycle.currentWork()) return;
             if (proc == p) {
-                proc = null;
-                pipe = null;
+                AppLifecycle.publish(() -> { proc = null; pipe = null; });
             }
         }
         reset();
@@ -352,7 +385,7 @@ final class Browser {
         public void run() {
             if (state != State.READY) return;
             if (viewers.isEmpty() && SystemClock.elapsedRealtime() - lastUse > IDLE_STOP_MS) {
-                work.execute(Browser::stop);
+                work.execute(AppLifecycle.wrapWork(Browser::stop));
                 return;
             }
             main.postDelayed(this, 60_000);
@@ -373,8 +406,10 @@ final class Browser {
 
     /** Sends a command (to a tab's session, or to the browser when session is null) and waits for its result. */
     static JSONObject call(String method, JSONObject params, String session, long timeoutMs) throws Exception {
+        AppLifecycle.requireRunning(app);
         OutputStream o;
         synchronized (Browser.class) {
+            AppLifecycle.requireRunning(app);
             o = pipe;
         }
         if (o == null) throw new IllegalStateException("The background browser isn't running.");
@@ -383,7 +418,7 @@ final class Browser {
         if (params != null) m.put("params", params);
         if (session != null) m.put("sessionId", session);
         AtomicReference<JSONObject> box = new AtomicReference<>();
-        waiting.put(id, box);
+        AppLifecycle.publish(() -> waiting.put(id, box));
         try {
             byte[] b = m.toString().getBytes(StandardCharsets.UTF_8);
             synchronized (o) {
@@ -396,10 +431,12 @@ final class Browser {
                 while (box.get() == null && waiting.containsKey(id)) {
                     long left = end - SystemClock.elapsedRealtime();
                     if (left <= 0) throw new IllegalStateException(method + " timed out");
-                    box.wait(left);
+                    box.wait(Math.min(left, 300));
+                    AppLifecycle.requireRunning(app);
                 }
             }
             JSONObject r = box.get();
+            AppLifecycle.requireRunning(app);
             if (r == null) throw new IllegalStateException("The background browser stopped.");
             if (r.has("error")) throw new IllegalStateException(r.getJSONObject("error").optString("message", "error"));
             return r.optJSONObject("result") != null ? r.getJSONObject("result") : new JSONObject();
@@ -410,89 +447,92 @@ final class Browser {
 
     /** As call, without waiting for the result. */
     private static void send(String method, JSONObject params, String session) {
-        work.execute(() -> {
+        work.execute(AppLifecycle.wrapWork(() -> {
             try {
                 call(method, params, session, 10_000);
             } catch (Exception ignored) {
             }
-        });
+        }));
     }
 
     private static void onMessage(JSONObject m) throws Exception {
-        if (m.has("id")) {
-            AtomicReference<JSONObject> box = waiting.get(m.getInt("id"));
-            if (box != null) {
-                synchronized (box) {
-                    box.set(m);
-                    box.notifyAll();
-                }
-            }
-            return;
-        }
-        String method = m.optString("method");
-        JSONObject p = m.optJSONObject("params");
-        if (p == null) p = new JSONObject();
-        String sid = m.optString("sessionId", null);
-        switch (method) {
-            case "Page.screencastFrame":
-                onFrame(sid, p);
-                break;
-            case "Target.targetCreated":
-            case "Target.targetInfoChanged": {
-                JSONObject t = p.getJSONObject("targetInfo");
-                if (!"page".equals(t.optString("type"))) break;
-                boolean isNew = !pages.containsKey(t.getString("targetId"));
-                pages.put(t.getString("targetId"), t);
-                String opener = t.optString("openerId", "");
-                if (isNew && !opener.isEmpty()) { // a link that opens a new tab: its chat goes on there
-                    for (Map.Entry<String, String> e : tabs.entrySet()) {
-                        if (opener.equals(e.getValue())) {
-                            assign(e.getKey(), t.getString("targetId"));
-                            if (viewers.containsKey(e.getKey())) work.execute(() -> recast(e.getKey()));
-                        }
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            if (m.has("id")) {
+                AtomicReference<JSONObject> box = waiting.get(m.getInt("id"));
+                if (box != null) {
+                    synchronized (box) {
+                        box.set(m);
+                        box.notifyAll();
                     }
                 }
-                changed();
-                break;
+                return;
             }
-            case "Target.targetDestroyed": {
-                String id = p.optString("targetId");
-                JSONObject gone = pages.remove(id);
-                owners.remove(id);
-                String sess = sessions.remove(id);
-                if (sess != null) {
-                    dialogs.remove(sess);
-                    worlds.remove(sess);
+            String method = m.optString("method");
+            JSONObject p = m.optJSONObject("params");
+            if (p == null) p = new JSONObject();
+            String sid = m.optString("sessionId", null);
+            switch (method) {
+                case "Page.screencastFrame":
+                    onFrame(sid, p);
+                    break;
+                case "Target.targetCreated":
+                case "Target.targetInfoChanged": {
+                    JSONObject t = p.getJSONObject("targetInfo");
+                    if (!"page".equals(t.optString("type"))) break;
+                    boolean isNew = !pages.containsKey(t.getString("targetId"));
+                    pages.put(t.getString("targetId"), t);
+                    String opener = t.optString("openerId", "");
+                    if (isNew && !opener.isEmpty()) { // a link that opens a new tab: its chat goes on there
+                        for (Map.Entry<String, String> e : tabs.entrySet()) {
+                            if (opener.equals(e.getValue())) {
+                                assign(e.getKey(), t.getString("targetId"));
+                                if (viewers.containsKey(e.getKey())) work.execute(AppLifecycle.wrapWork(() -> recast(e.getKey())));
+                            }
+                        }
+                    }
+                    changed();
+                    break;
                 }
-                String opener = gone == null ? "" : gone.optString("openerId", "");
-                for (Map.Entry<String, String> e : tabs.entrySet()) {
-                    if (!id.equals(e.getValue())) continue;
-                    String key = e.getKey();
-                    if (!opener.isEmpty() && pages.containsKey(opener)) tabs.put(key, opener); // back to where it came from
-                    else tabs.remove(key);
-                    // a live view on it shows the tab the chat is in now (a sign-in popup that closed, window.close())
-                    if (viewers.containsKey(key)) work.execute(() -> recast(key));
+                case "Target.targetDestroyed": {
+                    String id = p.optString("targetId");
+                    JSONObject gone = pages.remove(id);
+                    owners.remove(id);
+                    String sess = sessions.remove(id);
+                    if (sess != null) {
+                        dialogs.remove(sess);
+                        worlds.remove(sess);
+                    }
+                    String opener = gone == null ? "" : gone.optString("openerId", "");
+                    for (Map.Entry<String, String> e : tabs.entrySet()) {
+                        if (!id.equals(e.getValue())) continue;
+                        String key = e.getKey();
+                        if (!opener.isEmpty() && pages.containsKey(opener)) tabs.put(key, opener); // back to where it came from
+                        else tabs.remove(key);
+                        // a live view on it shows the tab the chat is in now (a sign-in popup that closed, window.close())
+                        if (viewers.containsKey(key)) work.execute(AppLifecycle.wrapWork(() -> recast(key)));
+                    }
+                    if (sess != null) casting.values().removeIf(sess::equals);
+                    changed();
+                    break;
                 }
-                if (sess != null) casting.values().removeIf(sess::equals);
-                changed();
-                break;
+                case "Target.detachedFromTarget":
+                    sessions.values().remove(p.optString("sessionId"));
+                    break;
+                case "Page.frameNavigated": // a new document: the helpers' world went with the old one
+                    if (sid != null && !p.optJSONObject("frame").has("parentId")) worlds.remove(sid);
+                    break;
+                case "Page.javascriptDialogOpening":
+                    if (sid != null) dialogs.put(sid, p);
+                    changed();
+                    break;
+                case "Page.javascriptDialogClosed":
+                    if (sid != null) dialogs.remove(sid);
+                    changed();
+                    break;
+                default:
+                    break;
             }
-            case "Target.detachedFromTarget":
-                sessions.values().remove(p.optString("sessionId"));
-                break;
-            case "Page.frameNavigated": // a new document: the helpers' world went with the old one
-                if (sid != null && !p.optJSONObject("frame").has("parentId")) worlds.remove(sid);
-                break;
-            case "Page.javascriptDialogOpening":
-                if (sid != null) dialogs.put(sid, p);
-                changed();
-                break;
-            case "Page.javascriptDialogClosed":
-                if (sid != null) dialogs.remove(sid);
-                changed();
-                break;
-            default:
-                break;
         }
     }
 
@@ -511,8 +551,11 @@ final class Browser {
 
     /** The chat goes on in this tab. */
     private static void assign(String key, String target) {
-        tabs.put(key, target);
-        owners.put(target, key);
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            tabs.put(key, target);
+            owners.put(target, key);
+        }
     }
 
     /** Is this tab another chat's (its current one, or one it left open)? */
@@ -530,9 +573,12 @@ final class Browser {
     private static final Map<String, JSONArray> marks = new ConcurrentHashMap<>();
 
     static void setMarks(String key, JSONArray m) {
-        if (m == null) marks.remove(key);
-        else marks.put(key, m);
-        changed();
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            if (m == null) marks.remove(key);
+            else marks.put(key, m);
+            changed();
+        }
     }
 
     static JSONArray marks(String key) {
@@ -554,7 +600,10 @@ final class Browser {
 
     /** An agent used the chat's tab (a browser tool call). */
     static void agentUsed(String key) {
-        agentUse.put(key, SystemClock.elapsedRealtime());
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            agentUse.put(key, SystemClock.elapsedRealtime());
+        }
     }
 
     /** Is an agent working in this tab (it used it in the last two minutes)? */
@@ -568,13 +617,19 @@ final class Browser {
 
     /** The user used the chat's tab in the live view: the agent's item numbers may be stale. */
     static void touched(String key) {
-        touched.add(key);
-        used();
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            touched.add(key);
+            used();
+        }
     }
 
     /** Whether the user used the chat's tab since the last call (and forget it). */
     static boolean takeTouched(String key) {
-        return touched.remove(key);
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return false;
+            return touched.remove(key);
+        }
     }
 
     /** The chat's tab (target id), opening one when there's none and create is set; null otherwise. */
@@ -592,7 +647,10 @@ final class Browser {
         }
         t = call("Target.createTarget", new JSONObject().put("url", "about:blank"), null, 10_000).getString("targetId");
         JSONObject info = new JSONObject().put("targetId", t).put("type", "page").put("url", "about:blank").put("title", "");
-        pages.putIfAbsent(t, info);
+        synchronized (AppLifecycle.class) {
+            AppLifecycle.requireRunning(app);
+            pages.putIfAbsent(t, info);
+        }
         assign(key, t);
         changed();
         return t;
@@ -602,7 +660,7 @@ final class Browser {
     static void useTab(String key, String target) {
         if (!pages.containsKey(target)) throw new IllegalArgumentException("No such tab.");
         assign(key, target);
-        if (viewers.containsKey(key)) work.execute(() -> recast(key));
+        if (viewers.containsKey(key)) work.execute(AppLifecycle.wrapWork(() -> recast(key)));
         changed();
     }
 
@@ -617,7 +675,10 @@ final class Browser {
         if (s != null) return s;
         s = call("Target.attachToTarget", new JSONObject().put("targetId", target).put("flatten", true), null, 10_000)
                 .getString("sessionId");
-        sessions.put(target, s);
+        synchronized (AppLifecycle.class) {
+            AppLifecycle.requireRunning(app);
+            sessions.put(target, s);
+        }
         call("Page.enable", null, s, 10_000);
         call("Emulation.setDeviceMetricsOverride", new JSONObject().put("width", WIDTH).put("height", HEIGHT)
                 .put("deviceScaleFactor", 2).put("mobile", true), s, 10_000);
@@ -652,7 +713,7 @@ final class Browser {
         String t = tabs.get(key), s = t == null ? null : sessions.get(t);
         if (s == null) return;
         call("Page.handleJavaScriptDialog", new JSONObject().put("accept", accept), s, 5000);
-        dialogs.remove(s);
+        AppLifecycle.publish(() -> dialogs.remove(s));
         changed();
     }
 
@@ -676,7 +737,7 @@ final class Browser {
                     .put("returnByValue", true).put("awaitPromise", true), s, 20_000);
         } catch (IllegalStateException e) { // a new page since: its world went with the old one
             if (!String.valueOf(e.getMessage()).contains("context")) throw e;
-            worlds.remove(s);
+            AppLifecycle.publish(() -> worlds.remove(s));
             r = call("Runtime.evaluate", new JSONObject().put("expression", expression).put("contextId", world(s))
                     .put("returnByValue", true).put("awaitPromise", true), s, 20_000);
         }
@@ -702,7 +763,7 @@ final class Browser {
                 .getInt("executionContextId");
         JSONObject r = call("Runtime.evaluate", new JSONObject().put("expression", js).put("contextId", id), session, 20_000);
         if (r.has("exceptionDetails")) throw new IllegalStateException("Page helpers failed to load.");
-        worlds.put(session, id);
+        AppLifecycle.publish(() -> worlds.put(session, id));
         return id;
     }
 
@@ -751,7 +812,7 @@ final class Browser {
     private static JSONObject callUnlessDialog(String key, String method, JSONObject params, long timeoutMs) throws Exception {
         String s = sessionFor(key);
         AtomicReference<Object> out = new AtomicReference<>();
-        work.execute(() -> {
+        work.execute(AppLifecycle.wrapWork(() -> {
             Object r;
             try {
                 r = call(method, params, s, timeoutMs);
@@ -762,7 +823,7 @@ final class Browser {
                 out.set(r);
                 out.notifyAll();
             }
-        });
+        }));
         long end = SystemClock.elapsedRealtime() + timeoutMs + 1000;
         synchronized (out) {
             while (out.get() == null) {
@@ -832,28 +893,34 @@ final class Browser {
 
     /** Starts sending the chat's tab's frames to sink (any thread; starts the browser if needed). */
     static void watch(Context c, String key, Frames sink) {
-        List<Frames> l = viewers.get(key);
-        if (l == null) viewers.put(key, l = new java.util.concurrent.CopyOnWriteArrayList<>());
-        l.add(sink);
-        used();
-        work.execute(() -> {
-            try {
-                if (ensure(c, 120_000) != null) return;
-                recast(key);
-            } catch (Exception ignored) {
-            }
-        });
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            List<Frames> l = viewers.get(key);
+            if (l == null) viewers.put(key, l = new java.util.concurrent.CopyOnWriteArrayList<>());
+            l.add(sink);
+            used();
+            work.execute(AppLifecycle.wrapWork(() -> {
+                try {
+                    if (ensure(c, 120_000) != null) return;
+                    recast(key);
+                } catch (Exception ignored) {
+                }
+            }));
+        }
     }
 
     static void unwatch(String key, Frames sink) {
-        List<Frames> l = viewers.get(key);
-        if (l == null) return;
-        l.remove(sink);
-        if (!l.isEmpty()) return;
-        viewers.remove(key);
-        String s = casting.remove(key);
-        if (s != null && !casting.containsValue(s)) send("Page.stopScreencast", null, s);
-        used(); // the idle stop counts from when the last view closed
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork()) return;
+            List<Frames> l = viewers.get(key);
+            if (l == null) return;
+            l.remove(sink);
+            if (!l.isEmpty()) return;
+            viewers.remove(key);
+            String s = casting.remove(key);
+            if (s != null && !casting.containsValue(s)) send("Page.stopScreencast", null, s);
+            used(); // the idle stop counts from when the last view closed
+        }
     }
 
     /** (Re)starts the screencast for the chat's current tab, and sends a first frame right away. */
@@ -861,7 +928,11 @@ final class Browser {
         try {
             if (!viewers.containsKey(key) || state != State.READY) return;
             String s = sessionFor(key);
-            String old = casting.put(key, s);
+            String old;
+            synchronized (AppLifecycle.class) {
+                AppLifecycle.requireRunning(app);
+                old = casting.put(key, s);
+            }
             if (old != null && !old.equals(s) && !casting.containsValue(old)) send("Page.stopScreencast", null, old);
             call("Page.startScreencast", new JSONObject().put("format", "jpeg").put("quality", 55)
                     .put("maxWidth", WIDTH * 2).put("maxHeight", HEIGHT * 2).put("everyNthFrame", 1), s, 10_000);
@@ -881,20 +952,23 @@ final class Browser {
         String data = p.optString("data");
         // a few frames a second: the next one comes only after this one is acknowledged
         long wait = Math.max(0, FRAME_GAP_MS - (SystemClock.elapsedRealtime() - lastFrame));
-        acks.schedule(() -> {
-            lastFrame = SystemClock.elapsedRealtime();
+        acks.schedule(AppLifecycle.wrapWork(() -> {
+            AppLifecycle.publish(() -> lastFrame = SystemClock.elapsedRealtime());
             send("Page.screencastFrameAck", jsonOrNull("sessionId", frameId), session);
-        }, wait, TimeUnit.MILLISECONDS);
-        work.execute(() -> {
+        }), wait, TimeUnit.MILLISECONDS);
+        work.execute(AppLifecycle.wrapWork(() -> {
             byte[] jpg = android.util.Base64.decode(data, android.util.Base64.DEFAULT);
             Bitmap b = BitmapFactory.decodeByteArray(jpg, 0, jpg.length);
             for (Map.Entry<String, String> e : casting.entrySet()) if (e.getValue().equals(session)) deliver(e.getKey(), b);
-        });
+        }));
     }
 
     private static void deliver(String key, Bitmap b) {
-        List<Frames> l = viewers.get(key);
-        if (b == null || l == null) return;
+        List<Frames> l;
+        synchronized (AppLifecycle.class) {
+            if (!AppLifecycle.currentWork() || b == null || !viewers.containsKey(key)) return;
+            l = new ArrayList<>(viewers.get(key));
+        }
         for (Frames f : l) f.onFrame(b, WIDTH, HEIGHT);
     }
 
@@ -909,13 +983,13 @@ final class Browser {
     /** For the live view: runs r on the browser's own threads (never on the main thread). */
     static void later(ThrowingRunnable r) {
         used();
-        work.execute(() -> {
+        work.execute(AppLifecycle.wrapWork(() -> {
             try {
                 r.run();
             } catch (Exception e) {
                 android.util.Log.w("BuddyBrowser", "live view action", e);
             }
-        });
+        }));
     }
 
     interface ThrowingRunnable {

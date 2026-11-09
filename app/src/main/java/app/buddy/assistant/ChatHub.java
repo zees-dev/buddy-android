@@ -2,7 +2,6 @@ package app.buddy.assistant;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.SystemClock;
 
 import org.json.JSONArray;
@@ -27,7 +26,7 @@ final class ChatHub {
 
     final Sessions sessions;
     private final Context app;
-    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Handler main = AppLifecycle.workHandler();
     private final List<Listener> listeners = new ArrayList<>();
     private final List<Sessions.Session> viewing = new ArrayList<>();
     private String flash;
@@ -62,6 +61,22 @@ final class ChatHub {
     static synchronized ChatHub get(Context c) {
         if (instance == null) instance = new ChatHub(c.getApplicationContext());
         return instance;
+    }
+
+    static synchronized ChatHub existing() {
+        return instance;
+    }
+
+    void prepareExit() {
+        main.removeCallbacksAndMessages(null);
+        for (Sessions.Session s : sessions.all) {
+            if (!s.running) continue;
+            s.interrupted = true;
+            s.running = false;
+            if (s.schedule == null) s.allowed.clear();
+            Prefs.setBusy(app, s.id, false);
+        }
+        sessions.save();
     }
 
     private ChatHub(Context app) {
@@ -435,6 +450,7 @@ final class ChatHub {
     }
 
     void onEvent(JSONObject ev) {
+        if (Prefs.exited(app)) return;
         Sessions.Session ses = sessions.find(ev.optString("buddy_session", null));
         if (ses == null) return; // unknown chat (deleted, or started outside Buddy)
         ses.lastEventAt = SystemClock.elapsedRealtime();

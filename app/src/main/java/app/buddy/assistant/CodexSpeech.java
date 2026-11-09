@@ -22,7 +22,8 @@ final class CodexSpeech {
             + "Each time you're given text, read it exactly as written, word for word, in the language it is in, "
             + "naturally and warmly. Never add, answer, comment, ask, or hand anything off. Say nothing else.";
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
+    private static final Handler pageMain = new Handler(Looper.getMainLooper());
     private static final ArrayDeque<String> queue = new ArrayDeque<>();
     private static WebView web;
     private static Context app;
@@ -77,12 +78,14 @@ final class CodexSpeech {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void offer(String sdp) {
-                new Thread(() -> startCall(mine, sdp), "codex-speech-call").start();
+                pageMain.post(() -> {
+                    if (web == mine && !Prefs.exited(app)) new Thread(() -> startCall(mine, sdp), "codex-speech-call").start();
+                });
             }
 
             @JavascriptInterface
             public void connected() {
-                main.post(() -> {
+                pageMain.post(() -> {
                     if (web != mine) return;
                     connected = true;
                     next();
@@ -92,7 +95,7 @@ final class CodexSpeech {
             /** Whether the voice is audible right now (the page measures what it plays). */
             @JavascriptInterface
             public void sound(boolean on) {
-                main.post(() -> {
+                pageMain.post(() -> {
                     if (web != mine) return;
                     playing = on;
                     lastSound = System.currentTimeMillis();
@@ -101,7 +104,7 @@ final class CodexSpeech {
 
             @JavascriptInterface
             public void failed(String why) {
-                main.post(() -> {
+                pageMain.post(() -> {
                     if (web == mine) fail();
                 });
             }
@@ -113,13 +116,18 @@ final class CodexSpeech {
     private static void startCall(WebView page, String sdp) {
         try {
             CodexDictation.ensureServer(app);
-            if (threadId == null || threadServer != CodexDictation.server()) {
-                threadId = CodexDictation.newThread();
-                threadServer = CodexDictation.server();
-            }
-            sessionThread = threadId;
+            Process process = CodexDictation.server();
+            final String t = threadId == null || threadServer != process ? CodexDictation.newThread() : threadId;
+            AppLifecycle.publish(() -> {
+                if (web != page) return;
+                threadId = t;
+                threadServer = process;
+                sessionThread = t;
+            });
+            AppLifecycle.requireRunning(app);
+            if (web != page) return;
             JSONObject r = CodexDictation.request("thread/realtime/start", new JSONObject()
-                    .put("threadId", threadId)
+                    .put("threadId", t)
                     .put("transport", new JSONObject().put("type", "webrtc").put("sdp", sdp))
                     .put("version", "v3")
                     .put("outputModality", "audio")

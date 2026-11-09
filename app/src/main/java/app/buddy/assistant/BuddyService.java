@@ -8,7 +8,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Rect;
 import android.os.Handler;
-import android.os.Looper;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityWindowInfo;
 
@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class BuddyService extends AccessibilityService implements McpServer.Handler {
     private static volatile BuddyService instance;
 
-    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Handler main = AppLifecycle.workHandler();
     private Bubble bubble;
     private ControlIndicator control;
     /** After the user taps Stop on the control indicator, phone actions are refused until then (elapsedRealtime). */
@@ -58,6 +58,7 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
     private AutoPause autoPause;
     private final KeepAwake keepAwake = new KeepAwake(this);
     private Marks marks;
+    private boolean runtimeStarted;
     /** Touches on the screen while a card waited for the user (see onScreenTouched). */
     private volatile int cardTouches;
 
@@ -77,7 +78,15 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        // Install the accessibility window token during binding, even while the runtime stays exited.
+        getSystemService(WindowManager.class);
         instance = this;
+        startRuntime();
+    }
+
+    void startRuntime() {
+        if (runtimeStarted || Prefs.exited(this)) return;
+        runtimeStarted = true;
         Theme.load(this);
         orientation = getResources().getConfiguration().orientation;
         Models.setCodex(Prefs.codexModels(this));
@@ -95,6 +104,8 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         bubble = new Bubble(this);
         control = new ControlIndicator(this);
         bubble.show();
+        if (!Prefs.bubbleEnabled(this)) HiddenNotice.show(this);
+        AutoPause.onNotifications(NotificationWatcher.active());
         server = new McpServer(Prefs.token(this), this);
         server.start();
 
@@ -135,7 +146,7 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (bubble == null) return;
+        if (Prefs.exited(this) || bubble == null) return;
         int type = event.getEventType();
         if (type == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) { // only toasts; notifications aren't read here
             noteToast(event);
@@ -228,6 +239,14 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
 
     @Override
     public void onDestroy() {
+        stopRuntime();
+        instance = null;
+        super.onDestroy();
+    }
+
+    void stopRuntime() {
+        main.removeCallbacksAndMessages(null);
+        if (server != null) server.stop();
         try {
             unregisterReceiver(lockReceiver);
         } catch (Exception ignored) {
@@ -235,15 +254,12 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         RemoteSession.stop();
         SshServer.stop();
         CodexRemote.stop();
-        main.removeCallbacks(updateCheck);
-        if (server != null) server.stop();
         if (autoPause != null) autoPause.stop();
         keepAwake.remove();
         if (marks != null) marks.clear();
         if (bubble != null) bubble.remove();
         if (control != null) control.end();
-        instance = null;
-        super.onDestroy();
+        runtimeStarted = false;
     }
 
     Handler mainHandler() {
@@ -447,6 +463,10 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
 
     @Override
     public void onEvent(final JSONObject event) {
+        main.post(() -> handleEvent(event));
+    }
+
+    private void handleEvent(JSONObject event) {
         if ("buddy_pong".equals(event.optString("type"))) {
             Prefs.setHelperStatus(this, event.optString("text"));
             Prefs.setHelperVersion(this, event.optInt("helper", 1));
@@ -475,10 +495,10 @@ public class BuddyService extends AccessibilityService implements McpServer.Hand
         }
         String t = event.optString("type");
         if ("buddy_procs".equals(t) || "buddy_recent".equals(t) || "buddy_transcript".equals(t)) {
-            main.post(() -> ChatHub.get(this).onMonitorEvent(event));
+            ChatHub.get(this).onMonitorEvent(event);
             return;
         }
-        main.post(() -> ChatHub.get(this).onEvent(event));
+        ChatHub.get(this).onEvent(event);
     }
 
     // ------------------------------------------- called from tool threads

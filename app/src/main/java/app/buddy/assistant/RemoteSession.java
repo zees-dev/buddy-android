@@ -2,7 +2,6 @@ package app.buddy.assistant;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.Looper;
 
 import java.io.File;
 import java.io.InputStream;
@@ -31,7 +30,7 @@ final class RemoteSession {
     static volatile State state = State.OFF;
     static volatile String detail = "", url = null;
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
     private static final List<Listener> listeners = new ArrayList<>();
     private static Process proc;
     private static OutputStream keepOpen; // the terminal's input; closing it would end the session
@@ -52,8 +51,11 @@ final class RemoteSession {
     }
 
     private static void set(State s, String d) {
-        state = s;
-        detail = d == null ? "" : d;
+        if (!AppLifecycle.currentWork()) return;
+        AppLifecycle.publish(() -> {
+            state = s;
+            detail = d == null ? "" : d;
+        });
         main.post(() -> {
             for (Listener l : new ArrayList<>(listeners)) l.onRemoteChanged();
         });
@@ -65,29 +67,37 @@ final class RemoteSession {
 
     /** Start if switched on and not running (called on service start and from Settings). */
     static void ensure(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         final Context app = c.getApplicationContext();
         synchronized (RemoteSession.class) {
+            if (!AppLifecycle.currentWork()) return;
             if (!Prefs.remoteSession(app) || proc != null || starting) return;
             if (!SetupState.planSignedIn(app, "claude")) {
                 set(State.ERROR, app.getString(R.string.remote_sign_in_first));
                 return;
             }
-            starting = true;
+            AppLifecycle.publish(() -> starting = true);
         }
         set(State.STARTING, app.getString(R.string.remote_starting));
         new Thread(() -> run(app)).start();
     }
 
     static void stop() {
+        if (!AppLifecycle.currentWork()) return;
+        main.removeCallbacksAndMessages(null);
         Process p;
         synchronized (RemoteSession.class) {
+            if (!AppLifecycle.currentWork()) return;
             p = proc;
-            proc = null;
-            keepOpen = null;
+            AppLifecycle.publish(() -> {
+                starting = false;
+                proc = null;
+                keepOpen = null;
+            });
         }
         if (p != null) p.destroy();
-        url = null;
-        quickFails = 0; // turning it off and on again starts with fresh retries
+        AppLifecycle.publish(() -> url = null);
+        AppLifecycle.publish(() -> quickFails = 0); // turning it off and on again starts with fresh retries
         set(State.OFF, "");
     }
 
@@ -100,29 +110,37 @@ final class RemoteSession {
             Process p = Linux.builder(app, "/bin/sh", "-c",
                     "cd " + DIR + " && exec script -qfc '" + cmd.replace("'", "'\\''") + "' /root/.buddy/remote.log").start();
             synchronized (RemoteSession.class) {
-                starting = false;
+                if (!AppLifecycle.currentWork()) {
+                    p.destroy();
+                    return;
+                }
+                AppLifecycle.publish(() -> starting = false);
                 if (!Prefs.remoteSession(app)) {
                     p.destroy();
                     return;
                 }
-                proc = p;
-                keepOpen = p.getOutputStream();
+                AppLifecycle.publish(() -> {
+                    proc = p;
+                    keepOpen = p.getOutputStream();
+                });
+                if (!AppLifecycle.currentWork()) { p.destroy(); return; }
             }
-            lastStart = System.currentTimeMillis();
+            AppLifecycle.publish(() -> lastStart = System.currentTimeMillis());
             Pattern u = Pattern.compile("https://claude\\.ai/code/session_[A-Za-z0-9_]+");
             StringBuilder tail = new StringBuilder();
             try (InputStream in = p.getInputStream()) {
                 byte[] buf = new byte[8192];
                 int n;
                 while ((n = in.read(buf)) > 0) {
+                    if (!AppLifecycle.currentWork()) return;
                     tail.append(new String(buf, 0, n, StandardCharsets.UTF_8));
                     if (tail.length() > 20000) tail.delete(0, tail.length() - 10000);
                     String plain = tail.toString().replaceAll("\u001B\\[[0-9;?]*[ -/]*[@-~]", "");
                     Matcher m = u.matcher(plain);
                     if (state != State.ACTIVE && (m.find() || plain.contains("/rc active"))) {
                         Matcher all = u.matcher(plain);
-                        while (all.find()) url = all.group();
-                        quickFails = 0;
+                        while (all.find()) AppLifecycle.publish(() -> url = all.group());
+                        AppLifecycle.publish(() -> quickFails = 0);
                         set(State.ACTIVE, "");
                     }
                 }
@@ -131,17 +149,23 @@ final class RemoteSession {
         } catch (Exception e) {
             set(State.ERROR, app.getString(R.string.remote_start_failed, e.getMessage()));
         }
+        if (!AppLifecycle.currentWork()) return;
         boolean wanted;
         synchronized (RemoteSession.class) {
-            starting = false;
+            if (!AppLifecycle.currentWork()) return;
+            AppLifecycle.publish(() -> starting = false);
             wanted = proc != null && Prefs.remoteSession(app);
-            proc = null;
-            keepOpen = null;
+            AppLifecycle.publish(() -> {
+                proc = null;
+                keepOpen = null;
+            });
         }
-        url = null;
+        AppLifecycle.publish(() -> url = null);
         if (!wanted) return;
         // it stopped on its own: start again, backing off if it keeps failing right away
-        if (System.currentTimeMillis() - lastStart < 30_000) quickFails++;
+        AppLifecycle.publish(() -> {
+            if (System.currentTimeMillis() - lastStart < 30_000) quickFails++;
+        });
         if (quickFails >= 3) {
             set(State.ERROR, app.getString(R.string.remote_keeps_stopping));
             return;

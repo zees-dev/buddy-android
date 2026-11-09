@@ -13,6 +13,14 @@ final class Prefs {
         return c.getSharedPreferences("buddy", Context.MODE_PRIVATE);
     }
 
+    static boolean exited(Context c) {
+        return AppLifecycle.stopping() || sp(c).getBoolean("exited", false);
+    }
+
+    static boolean setExited(Context c, boolean exited) {
+        return sp(c).edit().putBoolean("exited", exited).commit();
+    }
+
     /** Shared secret for the local MCP server; generated once per install. */
     static synchronized String token(Context c) {
         String t = sp(c).getString("token", null);

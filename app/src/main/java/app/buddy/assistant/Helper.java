@@ -50,6 +50,7 @@ final class Helper {
     /** Runs `buddy-run <token> args…` in the background. Throws with a readable message if Linux isn't set up. */
     static void run(Context c, String... args) {
         final Context app = c.getApplicationContext();
+        if (!AppLifecycle.currentWork() || Prefs.exited(app)) return;
         if (!Linux.installed(app)) {
             throw new IllegalStateException(app.getString(R.string.helper_linux_missing)); // shown to the user
         }
@@ -59,8 +60,11 @@ final class Helper {
         boolean chatRun = args.length > 1 && "ask".equals(args[0]);
         cmd[2] = chatRun ? McpServer.chatToken(args[1]) : Prefs.token(app);
         System.arraycopy(args, 0, cmd, 3, args.length);
+        int generation = AppLifecycle.workGeneration();
         pool.execute(() -> {
+            AppLifecycle.bindWork(generation);
             try {
+                if (!AppLifecycle.currentWork() || Prefs.exited(app)) return;
                 sync(app);
                 writePermissions(app);
                 Process p = Linux.builder(app, cmd).start();

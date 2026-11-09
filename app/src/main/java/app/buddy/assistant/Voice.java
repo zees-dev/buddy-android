@@ -90,6 +90,7 @@ final class Voice {
 
     /** Warm up the chosen engine (a chat or the bubble opened) so the first tap on the mic is quick. */
     static void prepare(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         String engine = Prefs.voiceEngine(c), lang = Prefs.voiceLang(c);
         if ("claude".equals(engine) && ClaudeDictation.supports(lang)) ClaudeDictation.prepare(c, lang);
         else if ("chatgpt".equals(engine)) CodexDictation.prepare(c);
@@ -97,6 +98,7 @@ final class Voice {
 
     /** Start listening. Returns an error message, or null when started. */
     static String listen(Context c, Listener l) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return c.getString(R.string.exit_stopped);
         if (!micAllowed(c)) return c.getString(R.string.voice_mic_needed);
         if (CodexLive.on()) return c.getString(R.string.live_mic_busy); // the call has the microphone
         stopListening();
@@ -120,6 +122,7 @@ final class Voice {
 
             @Override
             public void onResults(Bundle b) {
+                if (current != l || Prefs.exited(c)) return;
                 String t = best(b);
                 finish();
                 if (t != null && !t.trim().isEmpty()) l.onFinal(t.trim());
@@ -128,6 +131,7 @@ final class Voice {
 
             @Override
             public void onError(int error) {
+                if (current != l || Prefs.exited(c)) return;
                 finish();
                 l.onEnd(error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
                         ? c.getString(R.string.voice_didnt_catch) : error == SpeechRecognizer.ERROR_CLIENT ? null
@@ -217,6 +221,7 @@ final class Voice {
     // ------------------------------------------------------------- speaking
 
     static void speak(Context c, String text) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         // the words spoken in place of code and links are plain text, not regex replacement syntax
         String code = " " + java.util.regex.Matcher.quoteReplacement(c.getString(R.string.voice_code_omitted)) + " ";
         String link = java.util.regex.Matcher.quoteReplacement(c.getString(R.string.voice_link));
@@ -260,7 +265,7 @@ final class Voice {
         final Context c = appCtx;
         new Thread(() -> {
             java.util.Locale loc = c == null ? null : detectLanguage(c, text);
-            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            AppLifecycle.workHandler().post(() -> {
                 if (tts == null || !ttsReady) return;
                 if (loc != null && tts.isLanguageAvailable(loc) >= TextToSpeech.LANG_AVAILABLE) {
                     tts.setLanguage(loc);
@@ -300,6 +305,7 @@ final class Voice {
     }
 
     static void stopSpeaking() {
+        pending = null;
         CodexSpeech.stop();
         if (tts != null && ttsReady) tts.stop();
     }

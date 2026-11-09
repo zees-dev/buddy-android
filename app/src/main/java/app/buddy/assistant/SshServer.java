@@ -2,7 +2,6 @@ package app.buddy.assistant;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.SystemClock;
 import android.widget.Toast;
 
@@ -43,7 +42,7 @@ final class SshServer {
     static volatile State state = State.OFF;
     static volatile String detail = "";
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
     private static final List<Listener> listeners = new ArrayList<>();
     private static Context app;
     private static Process proc;
@@ -65,8 +64,11 @@ final class SshServer {
     }
 
     private static void set(State s, String d) {
-        state = s;
-        detail = d == null ? "" : d;
+        if (!AppLifecycle.currentWork()) return;
+        AppLifecycle.publish(() -> {
+            state = s;
+            detail = d == null ? "" : d;
+        });
         main.post(() -> {
             for (Listener l : new ArrayList<>(listeners)) l.onSshChanged();
         });
@@ -74,28 +76,36 @@ final class SshServer {
 
     /** Start if switched on and not running (called on service start and from Settings). */
     static void ensure(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         synchronized (SshServer.class) {
+            if (!AppLifecycle.currentWork()) return;
             app = c.getApplicationContext();
             if (!Prefs.sshServer(app) || proc != null || starting) return;
             if (!Linux.installed(app)) {
                 set(State.ERROR, app.getString(R.string.helper_linux_missing));
                 return;
             }
-            starting = true;
+            AppLifecycle.publish(() -> starting = true);
         }
         set(State.STARTING, "");
         new Thread(() -> run(app)).start();
     }
 
     static void stop() {
+        if (!AppLifecycle.currentWork()) return;
+        main.removeCallbacksAndMessages(null);
         Process p;
         synchronized (SshServer.class) {
+            if (!AppLifecycle.currentWork()) return;
             p = proc;
-            proc = null;
-            code = null;
+            AppLifecycle.publish(() -> {
+                starting = false;
+                proc = null;
+                code = null;
+            });
         }
         if (p != null) p.destroy();
-        quickFails = 0; // turning it off and on again starts with fresh retries
+        AppLifecycle.publish(() -> quickFails = 0); // turning it off and on again starts with fresh retries
         set(State.OFF, "");
     }
 
@@ -105,23 +115,29 @@ final class SshServer {
             prepare(app);
             Process p = Linux.builder(app, "/usr/sbin/sshd", "-D", "-e", "-f", CONFIG).start();
             synchronized (SshServer.class) {
-                starting = false;
+                if (!AppLifecycle.currentWork()) {
+                    p.destroy();
+                    return;
+                }
+                AppLifecycle.publish(() -> starting = false);
                 if (!Prefs.sshServer(app)) {
                     p.destroy();
                     return;
                 }
-                proc = p;
+                AppLifecycle.publish(() -> proc = p);
+                if (!AppLifecycle.currentWork()) { p.destroy(); return; }
             }
             p.getOutputStream().close();
-            lastStart = System.currentTimeMillis();
+            AppLifecycle.publish(() -> lastStart = System.currentTimeMillis());
             try (BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = in.readLine()) != null) {
+                    if (!AppLifecycle.currentWork()) return;
                     if (line.trim().isEmpty()) continue;
                     prev = last;
                     last = line.trim();
                     if (state != State.ACTIVE && line.contains("Server listening on")) {
-                        quickFails = 0;
+                        AppLifecycle.publish(() -> quickFails = 0);
                         set(State.ACTIVE, "");
                     }
                 }
@@ -130,15 +146,19 @@ final class SshServer {
         } catch (Exception e) {
             if (Prefs.sshServer(app)) set(State.ERROR, app.getString(R.string.remote_start_failed, e.getMessage()));
         }
+        if (!AppLifecycle.currentWork()) return;
         boolean wanted;
         synchronized (SshServer.class) {
-            starting = false;
+            if (!AppLifecycle.currentWork()) return;
+            AppLifecycle.publish(() -> starting = false);
             wanted = proc != null && Prefs.sshServer(app);
-            proc = null;
+            AppLifecycle.publish(() -> proc = null);
         }
         if (!wanted) return;
         // it stopped on its own: start again, backing off if it keeps failing right away
-        if (System.currentTimeMillis() - lastStart < 30_000) quickFails++;
+        AppLifecycle.publish(() -> {
+            if (System.currentTimeMillis() - lastStart < 30_000) quickFails++;
+        });
         if (quickFails >= 3) {
             set(State.ERROR, app.getString(R.string.ssh_keeps_stopping, (prev + " " + last).trim()));
             return;
@@ -168,9 +188,9 @@ final class SshServer {
     static synchronized String newCode() {
         byte[] b = new byte[18];
         new SecureRandom().nextBytes(b);
-        code = android.util.Base64.encodeToString(b, android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP
-                | android.util.Base64.NO_PADDING);
-        codeUntil = SystemClock.elapsedRealtime() + CODE_MS;
+        AppLifecycle.publish(() -> { code = android.util.Base64.encodeToString(b, android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP
+                | android.util.Base64.NO_PADDING); });
+        AppLifecycle.publish(() -> codeUntil = SystemClock.elapsedRealtime() + CODE_MS);
         return code;
     }
 
@@ -184,11 +204,12 @@ final class SshServer {
         Matcher m = KEY.matcher(body.trim());
         Context c;
         synchronized (SshServer.class) {
+            if (!AppLifecycle.currentWork()) return null;
             c = app;
             if (!acceptsCode(given) || !m.matches()) {
                 return null;
             }
-            code = null; // used once
+            AppLifecycle.publish(() -> code = null); // used once
             // no options in front of the key, and a comment that stays on its line
             String comment = m.group(2) == null ? "" : m.group(2).replaceAll("[^A-Za-z0-9@._:+=-]", "_");
             try {

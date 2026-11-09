@@ -2,7 +2,6 @@ package app.buddy.assistant;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.Looper;
 
 import org.json.JSONObject;
 
@@ -32,7 +31,7 @@ final class CodexRemote {
     static volatile State state = State.OFF;
     static volatile String detail = "";
 
-    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Handler main = AppLifecycle.workHandler();
     private static final List<Listener> listeners = new ArrayList<>();
     private static Process proc;
     private static OutputStream commands; // the script's input: one command per line; closing it ends the session
@@ -55,8 +54,11 @@ final class CodexRemote {
     }
 
     private static void set(State s, String d) {
-        state = s;
-        detail = d == null ? "" : d;
+        if (!AppLifecycle.currentWork()) return;
+        AppLifecycle.publish(() -> {
+            state = s;
+            detail = d == null ? "" : d;
+        });
         main.post(() -> {
             for (Listener l : new ArrayList<>(listeners)) l.onCodexRemoteChanged();
         });
@@ -64,27 +66,35 @@ final class CodexRemote {
 
     /** Start if switched on and not running (called on service start and from Settings). */
     static void ensure(Context c) {
+        if (!AppLifecycle.currentWork() || Prefs.exited(c)) return;
         final Context app = c.getApplicationContext();
         synchronized (CodexRemote.class) {
+            if (!AppLifecycle.currentWork()) return;
             if (!Prefs.codexRemote(app) || proc != null || starting) return;
             if (!SetupState.planSignedIn(app, "codex")) {
                 set(State.ERROR, app.getString(R.string.setup_set_up_first, "Codex"));
                 return;
             }
-            starting = true;
+            AppLifecycle.publish(() -> starting = true);
         }
         set(State.STARTING, "");
         new Thread(() -> run(app)).start();
     }
 
     static void stop() {
+        if (!AppLifecycle.currentWork()) return;
+        main.removeCallbacksAndMessages(null);
         Process p;
         OutputStream o;
         synchronized (CodexRemote.class) {
+            if (!AppLifecycle.currentWork()) return;
             p = proc;
             o = commands;
-            proc = null;
-            commands = null;
+            AppLifecycle.publish(() -> {
+                starting = false;
+                proc = null;
+                commands = null;
+            });
         }
         if (o != null) {
             try {
@@ -93,7 +103,7 @@ final class CodexRemote {
             }
         }
         if (p != null) p.destroy();
-        quickFails = 0; // turning it off and on again starts with fresh retries
+        AppLifecycle.publish(() -> quickFails = 0); // turning it off and on again starts with fresh retries
         paired(null, "stopped");
         set(State.OFF, "");
     }
@@ -104,18 +114,26 @@ final class CodexRemote {
             Helper.sync(app);
             Process p = Linux.builder(app, "/bin/sh", "/root/bin/codex-remote", Prefs.token(app)).start();
             synchronized (CodexRemote.class) {
-                starting = false;
+                if (!AppLifecycle.currentWork()) {
+                    p.destroy();
+                    return;
+                }
+                AppLifecycle.publish(() -> starting = false);
                 if (!Prefs.codexRemote(app)) {
                     p.destroy();
                     return;
                 }
-                proc = p;
-                commands = p.getOutputStream();
+                AppLifecycle.publish(() -> {
+                    proc = p;
+                    commands = p.getOutputStream();
+                });
+                if (!AppLifecycle.currentWork()) { p.destroy(); return; }
             }
-            lastStart = System.currentTimeMillis();
+            AppLifecycle.publish(() -> lastStart = System.currentTimeMillis());
             try (BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = in.readLine()) != null) {
+                    if (!AppLifecycle.currentWork()) return;
                     line = line.replaceAll("\u001B\\[[0-9;?]*[ -/]*[@-~]", "").trim();
                     // Codex warns that bubblewrap is missing on every start; its sandbox can't run under proot anyway
                     if (line.isEmpty() || line.contains("bubblewrap")) continue;
@@ -124,7 +142,7 @@ final class CodexRemote {
                     } else if (line.startsWith("BUDDY_PAIR_ERROR ")) {
                         paired(null, line.substring(17));
                     } else if (line.startsWith("BUDDY_READY") || line.contains("next_status=Connected")) {
-                        quickFails = 0;
+                        AppLifecycle.publish(() -> quickFails = 0);
                         if (state != State.ACTIVE) set(State.ACTIVE, "");
                     } else {
                         prev = last;
@@ -137,16 +155,22 @@ final class CodexRemote {
             if (Prefs.codexRemote(app)) set(State.ERROR, app.getString(R.string.remote_start_failed, e.getMessage()));
         }
         paired(null, (prev + " " + last).trim());
+        if (!AppLifecycle.currentWork()) return;
         boolean wanted;
         synchronized (CodexRemote.class) {
-            starting = false;
+            if (!AppLifecycle.currentWork()) return;
+            AppLifecycle.publish(() -> starting = false);
             wanted = proc != null && Prefs.codexRemote(app);
-            proc = null;
-            commands = null;
+            AppLifecycle.publish(() -> {
+                proc = null;
+                commands = null;
+            });
         }
         if (!wanted) return;
         // it stopped on its own: start again, backing off if it keeps failing right away
-        if (System.currentTimeMillis() - lastStart < 30_000) quickFails++;
+        AppLifecycle.publish(() -> {
+            if (System.currentTimeMillis() - lastStart < 30_000) quickFails++;
+        });
         if (quickFails >= 3) {
             set(State.ERROR, app.getString(R.string.codex_keeps_stopping, (prev + " " + last).trim()));
             return;
@@ -160,20 +184,23 @@ final class CodexRemote {
      * with the answer (manualPairingCode, expiresAt in seconds…) or, when that failed, null and the reason.
      */
     static void pair(BiConsumer<JSONObject, String> done) {
+        if (!AppLifecycle.currentWork()) return;
         OutputStream o;
         synchronized (CodexRemote.class) {
+            if (!AppLifecycle.currentWork()) return;
             o = commands;
             if (o == null || state != State.ACTIVE) {
                 main.post(() -> done.accept(null, "not running"));
                 return;
             }
-            pairDone = done;
+            AppLifecycle.publish(() -> pairDone = done);
         }
         main.removeCallbacks(pairTimeout);
         main.postDelayed(pairTimeout, 60_000);
         new Thread(() -> {
             try {
                 synchronized (o) {
+                    if (!AppLifecycle.currentWork()) return;
                     o.write("pair\n".getBytes(StandardCharsets.UTF_8));
                     o.flush();
                 }
@@ -184,10 +211,12 @@ final class CodexRemote {
     }
 
     private static void paired(String json, String error) {
+        if (!AppLifecycle.currentWork()) return;
         BiConsumer<JSONObject, String> d;
         synchronized (CodexRemote.class) {
+            if (!AppLifecycle.currentWork()) return;
             d = pairDone;
-            pairDone = null;
+            AppLifecycle.publish(() -> pairDone = null);
         }
         if (d == null) return;
         main.removeCallbacks(pairTimeout);
